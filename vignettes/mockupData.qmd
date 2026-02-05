@@ -1,0 +1,267 @@
+---
+title: To create mock up data to use in the other documents
+author: Romain Forestier
+editor_options: 
+  chunk_output_type: console
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{To create mock up data to use in the other documents}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, echo = F, warning = F, message = F, warning = FALSE}
+source("../myLibrary.r")
+knitr::opts_chunk$set(eval = T, echo = F, message = F, warning = F)
+
+```
+
+# Operational data
+
+```{r}
+cap_dat <- read.csv("/home/romainf/Documents/FisheriesDatabases/operational_captain_longline_logsheet_catch_effort_data_yft_bet_skj_oth.csv")
+
+```
+
+```{r}
+# Helper to convert lat/lon back to DDDMM format
+decimal_to_dddmm <- function(decimal, is_lon = FALSE) {
+  if (is.na(decimal)) return(NA)
+  
+  if (is_lon && decimal > 180) {
+    # Was originally West, convert back
+    decimal <- 360 - decimal
+    direction <- "W"
+  } else if (is_lon) {
+    direction <- "E"
+  } else {
+    direction <- ifelse(decimal < 0, "S", "N")
+  }
+  
+  degrees <- floor(abs(decimal))
+  minutes <- (abs(decimal) - degrees) * 60
+  
+  # Format: DDDMM.MMM or DDMM.MMM
+  if (is_lon) {
+    dddmm <- sprintf("%03d%05.2f", degrees, minutes)
+  } else {
+    dddmm <- sprintf("%02d%05.2f", degrees, minutes)
+  }
+  
+  paste0(dddmm, direction)
+}
+
+# Generate synthetic captain logsheet data
+generate_mock_captain_LL <- function(n_total = 500, stats = NULL) {
+  
+  # If no stats provided, use reasonable defaults based on lon_range/lat_range
+  if (is.null(stats)) {
+    stats <- list(
+      date_min = as.Date("1960-01-01"),
+      date_max = as.Date("2023-12-31"),
+      lat_min = -54.5, lat_max = 64.5,
+      lon_min = 89.5, lon_max = 288.5,
+      effort_mean = 20, effort_sd = 10,
+      hbf_mean = 15, hbf_sd = 5,
+      catch_mean = 50, catch_sd = 30,
+      weight_mean = 2, weight_sd = 1,
+      flags = c("JP", "TW", "CN", "US", "AU")
+    )
+  }
+  
+  vessel_names <- c("Setosa_I", "Setosa_II", "Versicolor_I", "Versicolor_II", 
+                    "Virginica_I", "Virginica_II", "Setosa_III", "Versicolor_III")
+  
+  # Category sizes
+  n_good <- 1335
+  n_na <- 30
+  n_hbf_outliers <- 20
+  n_dummy <- 15
+  n_zero <- 20
+  n_effort_outliers <- 15
+  n_bad_names <- 10
+  n_duplicates <- 20
+  n_outside_mask <- 20
+  n_coord_errors <- 15
+  
+  # Generate base "good" data
+  good_data <- data.frame(
+    flag = sample(stats$flags, n_good, replace = TRUE),
+    vesselname = sample(vessel_names, n_good, replace = TRUE),
+    set_date = sample(seq(stats$date_min, stats$date_max, by = "day"), n_good, replace = TRUE),
+    latitude = runif(n_good, stats$lat_min, stats$lat_max),
+    longitude = runif(n_good, stats$lon_min, stats$lon_max),
+    E = abs(rnorm(n_good, stats$effort_mean, stats$effort_sd)),
+    hbf = abs(rnorm(n_good, stats$hbf_mean, stats$hbf_sd)),
+    yft_n = rpois(n_good, stats$catch_mean),
+    yft_w = abs(rnorm(n_good, stats$weight_mean, stats$weight_sd)),
+    skj_n = rpois(n_good, stats$catch_mean * 0.3),
+    skj_w = abs(rnorm(n_good, stats$weight_mean * 0.3, stats$weight_sd)),
+    bet_n = rpois(n_good, stats$catch_mean * 0.5),
+    bet_w = abs(rnorm(n_good, stats$weight_mean * 0.5, stats$weight_sd)),
+    alb_n = rpois(n_good, stats$catch_mean * 0.2),
+    alb_w = abs(rnorm(n_good, stats$weight_mean * 0.2, stats$weight_sd)),
+    oth_n = rpois(n_good, stats$catch_mean * 0.1),
+    oth_w = abs(rnorm(n_good, stats$weight_mean * 0.1, stats$weight_sd))
+  )
+  
+  # Convert lat/lon to DDDMM format
+  good_data$latitude_dddmm <- sapply(good_data$latitude, decimal_to_dddmm, is_lon = FALSE)
+  good_data$longitude_dddmm <- sapply(good_data$longitude, decimal_to_dddmm, is_lon = TRUE)
+  
+  # NA problems
+  na_data <- good_data[1:n_na, ]
+  na_fields <- c("set_date", "latitude", "longitude", "E", "yft_n", "skj_n", "bet_n", "alb_n", "oth_n")
+  for (i in 1:n_na) {
+    na_data[i, sample(na_fields, 1)] <- NA
+  }
+  
+  # HBF outliers - way beyond 3 SD
+  hbf_outlier_data <- good_data[1:n_hbf_outliers, ]
+  hbf_outlier_data$hbf <- stats$hbf_mean + sample(c(-1, 1), n_hbf_outliers, replace = TRUE) * 
+    4 * stats$hbf_sd
+  
+  # Dummy fisheries
+  dummy_data <- good_data[1:n_dummy, ]
+  dummy_data$E <- 0
+  dummy_data$yft_n <- rpois(n_dummy, stats$catch_mean)
+  
+  # Zero fisheries
+  zero_data <- good_data[1:n_zero, ]
+  zero_data$E <- 0
+  zero_data$yft_n <- 0
+  zero_data$skj_n <- 0
+  zero_data$bet_n <- 0
+  zero_data$alb_n <- 0
+  zero_data$oth_n <- 0
+  
+  # Effort outliers
+  effort_outlier_data <- good_data[1:n_effort_outliers, ]
+  effort_outlier_data$E <- stats$effort_mean + sample(c(-1, 1), n_effort_outliers, replace = TRUE) * 
+    4 * stats$effort_sd
+  
+  # Bad vessel names
+  name_data <- good_data[1:n_bad_names, ]
+  name_data$vesselname <- paste0(name_data$vesselname, "  ")
+  
+  # Exact duplicates
+  dup_data <- good_data[1:(n_duplicates/2), ]
+  dup_data <- rbind(dup_data, dup_data)
+  
+  # Outside mask - obviously wrong coordinates
+  outside_data <- good_data[1:n_outside_mask, ]
+  # lon < 89.5: Indian Ocean
+  outside_data$longitude[1:7] <- runif(7, 40, 85)
+  # lon > 288.5: Caribbean/Atlantic
+  outside_data$longitude[8:14] <- runif(7, 295, 350)
+  # lat < -54.5: Antarctica
+  outside_data$latitude[15:17] <- runif(3, -70, -60)
+  # lat > 64.5: Arctic
+  outside_data$latitude[18:20] <- runif(3, 70, 80)
+  
+  # Reconvert outside coords to DDDMM
+  outside_data$latitude_dddmm <- sapply(outside_data$latitude, decimal_to_dddmm, is_lon = FALSE)
+  outside_data$longitude_dddmm <- sapply(outside_data$longitude, decimal_to_dddmm, is_lon = TRUE)
+  
+  # Bad coordinate formats - comprehensive error examples
+n_coord_errors <- 15
+
+# Base data for coordinate errors
+coord_error_data <- good_data[1:n_coord_errors, ]
+
+# Assign different coordinate errors (will be applied to latitude_dddmm/longitude_dddmm)
+coord_error_data$latitude_dddmm <- c(
+  "N",                    # cardinal_only
+  "4530X",                # unknown_cardinal  
+  "45.30.5N",             # multiple_decimals
+  "45A30N",               # invalid_format
+  "5N",                   # insufficient_digits
+  "4565N",                # minutes_out_of_range (65 minutes)
+  "4530E",                # wrong_cardinal_for_type (E on latitude)
+  "9530N",                # latitude_out_of_range (95 degrees)
+  "",                     # empty string (caught as empty_or_null)
+  "12.34.56S",            # multiple_decimals
+  "3070N",                # minutes_out_of_range (70 minutes)
+  "4530W",                # wrong_cardinal_for_type (W on latitude)
+  "2X45N",                # invalid_format
+  "S",                    # cardinal_only
+  "1234Y"                 # unknown_cardinal
+)
+
+coord_error_data$longitude_dddmm <- c(
+  "E",                    # cardinal_only
+  "12025Z",               # unknown_cardinal
+  "120.25.5E",            # multiple_decimals
+  "120B25W",              # invalid_format
+  "25E",                  # insufficient_digits
+  "12065W",               # minutes_out_of_range (65 minutes)
+  "12025N",               # wrong_cardinal_for_type (N on longitude)
+  "36525E",               # longitude_out_of_range (365 degrees)
+  "",                     # empty string
+  "150.30.25W",           # multiple_decimals
+  "17580E",               # minutes_out_of_range (80 minutes)
+  "14530S",               # wrong_cardinal_for_type (S on longitude)
+  "1X5025E",              # invalid_format
+  "W",                    # cardinal_only
+  "9999Q"                 # unknown_cardinal
+)
+
+  # Combine all
+  all_data <- rbind(
+    good_data, na_data, hbf_outlier_data, dummy_data, zero_data,
+    effort_outlier_data, name_data, dup_data, outside_data, coord_error_data
+  )
+  
+  # Add estimated values
+  all_data$yft_n_est <- ifelse(is.na(all_data$yft_n) | all_data$yft_n == 0, 
+                                 rpois(nrow(all_data), 5), NA)
+  all_data$skj_n_est <- ifelse(is.na(all_data$skj_n) | all_data$skj_n == 0, 
+                                 rpois(nrow(all_data), 3), NA)
+  all_data$bet_n_est <- ifelse(is.na(all_data$bet_n) | all_data$bet_n == 0, 
+                                 rpois(nrow(all_data), 4), NA)
+  all_data$alb_n_est <- ifelse(is.na(all_data$alb_n) | all_data$alb_n == 0, 
+                                 rpois(nrow(all_data), 2), NA)
+  all_data$oth_n_est <- ifelse(is.na(all_data$oth_n) | all_data$oth_n == 0, 
+                                 rpois(nrow(all_data), 1), NA)
+  
+  # Shuffle
+  all_data <- all_data[sample(nrow(all_data)), ]
+  
+  # Format dates as "1960-10-23 00:00:00.000"
+  formatted_dates <- format(all_data$set_date, "%Y-%m-%d 00:00:00.000")
+  
+  # Create final output
+  output_data <- data.frame(
+    flag = all_data$flag,
+    vesselname = all_data$vesselname,
+    latitude = all_data$latitude_dddmm,
+    longitude = all_data$longitude_dddmm,
+    set_date = formatted_dates,
+    hooks_nb = all_data$E * 100,
+    hooks_between_floats = all_data$hbf,
+    yft_sp_weight_kg = all_data$yft_w * 1000,
+    yft_sp_nb = all_data$yft_n,
+    yft_sp_nb_est = all_data$yft_n_est,
+    skj_sp_weight_kg = all_data$skj_w * 1000,
+    skj_sp_nb = all_data$skj_n,
+    skj_sp_nb_est = all_data$skj_n_est,
+    bet_sp_weight_kg = all_data$bet_w * 1000,
+    bet_sp_nb = all_data$bet_n,
+    bet_sp_nb_est = all_data$bet_n_est,
+    alb_sp_weight_kg = all_data$alb_w * 1000,
+    alb_sp_nb = all_data$alb_n,
+    alb_sp_nb_est = all_data$alb_n_est,
+    oth_sp_weight_kg = all_data$oth_w * 1000,
+    oth_sp_nb = all_data$oth_n,
+    oth_sp_nb_est = all_data$oth_n_est
+  )
+  
+  return(output_data)
+}
+```
+
+```{r}
+test_data <- generate_mock_captain_LL()
+saveRDS(object = test_data, file = "mockData/operational_data.RDS")
+```
+

@@ -1,0 +1,252 @@
+---
+title: 01 Setup
+author: Romain Forestier
+editor_options: 
+  chunk_output_type: console
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{01 Setup}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, echo = F, warning = F, message = F, warning = FALSE}
+source("../myLibrary.r")
+knitr::opts_chunk$set(eval = T, echo = F, message = F, warning = F)
+
+fig_width <- 20
+fig_height <- 16
+
+options(tibble.print_max = 50)
+
+```
+
+
+# Naming conventions
+
+
+```{r, eval = F}
+# not sure is needed at the moment
+summary_table <- data.frame("name" = c("captain_LL_raw",
+									   "captain_LL_1x1",
+									   # "captain_LL_flags",
+									   "captain_LL_outliers_mask",
+									   "captain_LL_outliers_effort",
+									   "captain_LL_ghostFisheries",
+									   "captain_LL_beforeAgg",
+									   "obs_LL_raw",
+									   "obs_LL_1x1",
+									   "obs_LL_flags",
+									   "obs_LL_outliers_mask",
+									   "obs_LL_outliers_effort",
+									   "obs_LL_ghostFisheries",
+									   "obs_LL_before_Agg",
+									   "LL_1x1",
+									   "aggregated_LL_5x5",
+									   "delta_LL_5x5",
+									   "aggregated_PS_1x1",
+									   "CL_raw",
+									   "CL_1x1",
+									   "CL_correctLenght"),
+							"content" = c("logsheets at .01 degrees resolution (hbf,hnb, nb, kg) for all species",
+										  "logsheets aggregated to 1 degree resolution in the PO and summed over time (y-m)(effort, nb, kg)",
+										  # "logsheets aggregated 1x1 with flag IDs",
+										  "outliers not present in the pacific area",
+										  "outliers with 0 catch and 0 effort",
+										  "outliers with positive catch and 0 effort",
+										  "logsheets with no outliers",
+										  "logbooks at .01 degrees resolution (hbf,hnb, nb, kg)",
+										  "logbooks aggregated to 1 degree resolution in the PO and summed over time (y-m-d)(effort, nb, kg)",
+										  "logbooks aggregated 1x1 with flag IDs",
+										  "logbooks not present in the pacific area",
+										  "logbooks with effort anomalies",
+										  "logbooks with catch without effort",
+										  "logbooks with no outliers",
+										  "aggregated database at 1 degrees of logbooks and logsheets",
+										  "aggregated database at 5 degrees resolution without groups/sums",
+										  "difference between LL_1x1 and aggregated database in 5x5 for LL",
+										  "aggregated database at 1 degrees of PS",
+										  "catch/length at .0001 degrees resolution in the PO",
+										  "catch/length aggregated to 1 degree resolution with mean length",
+										  "catch/length non aggregated with all length to UF")
+							
+)
+
+knitr::kable(summary_table, caption = "Saved files", format = "html")
+```
+
+
+```{r}
+# To redo when done with naming convention
+keywords_table <- data.frame("name" = c("captain",
+										"obs",
+										"EC",
+										"LF",
+										"agg",
+										"raw",
+										"clean",
+										"LL",
+										"PS",
+										"1x1",
+										"5x5",
+										"delta",
+										"CL"),
+							 "description" = c("captain logbooks",
+							 				  "observer logbooks",
+							 				  "Effort/Catch data",
+							 				  "Length frequency data",
+							 				  "aggregated",
+							 				  "data format converted to usable values, no infomation removed (NULL,NA,rounding,...)",
+							 				  "final result",
+							 				  "longline fisheries",
+							 				  "purse seine fisheries",
+							 				  "data aggregated to the 1x1 resolution",
+							 				  "data aggregated to the 5x5 resolution",
+							 				  "difference between two databases",
+							 				  "catch/length data")
+							 
+)
+
+
+
+knitr::kable(keywords_table, caption = "Keywords")
+
+```
+
+```{r}
+country_correspondence <- data.frame(
+  code = c("AS"," AU", "BZ", "CK", "CN", "ES", "FJ", "FM", "FR", "ID", "JP", "KI", "KR", "MH", "NC", "NU", "NZ", "PF", "PG", "PH", "PT", "PW", "SB", "TO", "TV", "TW", "US", "VN", "VU", "WS"),
+  country = c(
+  	"American Samoa",
+    "Australia",
+    "Belize", 
+    "Cook Islands",
+    "China",
+    "Spain",
+    "Fiji",
+    "Federated States of Micronesia",
+    "France",
+    "Indonesia", 
+    "Japan",
+    "Kiribati",
+    "Korea (South)",
+    "Marshall Islands",
+    "New Caledonia",
+    "Niue",
+    "New Zealand", 
+    "French Polynesia",
+    "Papua New Guinea",
+    "Philippines",
+    "Portugal",
+    "Palau",
+    "Solomon Islands",
+    "Tonga",
+    "Tuvalu",
+    "Taiwan",
+    "United States",
+    "Vietnam",
+    "Vanuatu",
+    "Samoa"
+  )
+
+)
+
+knitr::kable(country_correspondence, caption = "Country flags")
+
+```
+
+# Naming comvention
+
+yft = yellowfin
+
+bet = bigeye tuna
+
+alb = albacore
+
+skj = skipjack
+
+oth = other species than above tunas
+
+n = number
+
+w = weight in metric tons
+
+set_date = date in yyyy-mm-dd ; to double check
+
+set_date_mm = date in yyyy-mm-15
+
+latitude/longitude = high resolution coordinate
+
+latCent/lonCent = rounding coordinates to grid cell center
+
+latSouth/lonWest = coordinates points at grid cell's South West corner (convention)
+
+E = effort 
+
+
+FLAG is the vessel nationality and FLEET is a subset within that FLAG – usually to distinguish what we refer to as (i) “distant-water” vessels that are typically larger, fish in the high seas for long periods and tranship at sea, and (ii) “offshore” “small-scale” vessels that fish for shorter periods and are based out their home country or in PIC ports.
+
+# Masks 
+
+## Land
+The study area is determined by the mask below (ERA5 landmask). It corresponds to the climate forcings and model configurations. The corners of the Pacific model domain are 89E-71W, 55S-65N, the resolution 1 degree, so the mask dimension is 200x120.
+
+```{r}
+pmask <- scan("masks/mask_era5_np_1deg_po_cor_noIO.txt")
+pmask <- matrix(pmask, ncol = 200, byrow = T)
+rownames(pmask) <- lat_range[2]:lat_range[1]
+colnames(pmask) <- lon_range[1]:lon_range[2]
+
+plot_dat <- reshape2::melt(pmask)
+
+p_mask <- ggplot(plot_dat) +
+	geom_tile(aes(x = Var2, y = Var1, fill = as.factor(value)), width = 1, height = 1) +
+	scale_fill_manual(values = c("chocolate3", "dodgerblue1","dodgerblue2","dodgerblue3")) +
+	map_bg() +
+	coord_labels +
+	coord_fixed(xlim = lon_range, ylim = lat_range) +
+	myTheme() +
+	theme(legend.position = "none")
+
+print(p_mask)
+# ggsave("figures/map_mask.png", plot = p_mask, units = "cm", width = fig_width, height = fig_height)
+
+# Pre-process pmask into a lookup dataframe for faster processing
+pmask_lookup <- which(pmask > 0, arr.ind = TRUE) %>%
+	as_tibble() %>%
+	mutate(latCent = as.numeric(rownames(pmask)[row]),
+		   lonCent = as.numeric(colnames(pmask)[col])) %>%
+	dplyr::select(latCent, lonCent)
+saveRDS(pmask_lookup,"outputs/pmask_lookup.RDS")
+
+p5mask <- scan("masks/mask_era5_np_5deg_po_cor_noIO.txt")
+p5mask <- matrix(p5mask, ncol = 40, byrow = T)
+rownames(p5mask) <- seq(lat_range[2]-2, lat_range[1]-2, -5)
+colnames(p5mask) <- seq(lon_range[1]-2, lon_range[2]-2, 5)
+p5mask_lookup <- which(p5mask > 0, arr.ind = TRUE) %>%
+	as_tibble() %>%
+	mutate(latCent = as.numeric(rownames(p5mask)[row]),
+		   lonCent = as.numeric(colnames(p5mask)[col])) %>%
+	dplyr::select(latCent, lonCent)
+```
+
+## Temperature
+An additional ERA5 temperature mask is applied to the data to remove all catch made in waters below 10 C. It works for the data up until the end of 2022.
+
+```{r}
+temp_dym <- dym::read.var.dym("masks/po_era5np_1x30d_T_L1_1959_2022.dym")
+temp_arr <- temp_dym$var
+dimnames(temp_arr) <- list("time" = as.character(temp_dym$t),
+						   "longitude" = temp_dym$x,
+						   "latitude" = temp_dym$y)
+temp_mask <- reshape2::melt(temp_arr) %>% 
+	# mutate(years = floor(time),
+	# 	   months = floor((time - years) * 12) + 1,
+	# 	   ymd = as.Date(paste0(years, "-", months, "-", 15))) %>% 
+	# dplyr::select(-time,-years,-months) %>% 
+	rename(temperature = value,
+		   ymd = time)
+```
+
+
+

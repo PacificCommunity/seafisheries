@@ -1,0 +1,10 @@
+.Rproj.user
+.Rproj
+*.pdf
+outputs/
+R/myLibrary.r
+.Rhistory
+.Rdata
+.httr-oauth
+.DS_Store
+.quarto

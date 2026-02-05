@@ -1,0 +1,20 @@
+Package: seapodymClusterFisheries
+Title: Clustering Tools for Fisheries Data
+Version: 0.1.0
+Authors@R: 
+    person("Romain", "Forestier", , "romainf@spc.int", role = c("aut", "cre"))
+Description: Functions and tutorials for processing and clustering fisheries 
+    operational data for use with SEAPODYM models. Includes coordinate conversion,
+    data cleaning, and spatial filtering utilities.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Imports:
+    dplyr,
+    rlang,
+    stringr
+Suggests:
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
