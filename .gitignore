@@ -8,3 +8,5 @@ data-raw/*
 .httr-oauth
 .DS_Store
 .quarto
+vignettes/*.html
+vignettes/*_files

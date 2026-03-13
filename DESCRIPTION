@@ -15,7 +15,11 @@ Imports:
     rlang,
     stringr,
     ggplot2,
-    maps
+    maps,
+    factoextra,
+    cluster,
+    lubridate,
+    tictoc
 Suggests:
     knitr,
     rmarkdown,

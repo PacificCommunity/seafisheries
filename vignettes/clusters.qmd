@@ -9,18 +9,24 @@ vignette: >
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
-```{r, warning=FALSE, message=F, echo=FALSE}
-# setwd(dir = "example")
-source("../myLibrary.r")
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(seafisheries)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(here)
+
+dir.create(here("outputs"), showWarnings = FALSE, recursive = TRUE)
 stat_list <- list()
 ```
 
-
-
-
-This document demonstrates clustering of operational longline data to identify fishing strategies. The input data comes from the cleaned operational data (see document 02).
+This document demonstrates clustering of operational longline data to identify
+fishing strategies. The input data comes from the cleaned operational data
+(see vignette 02).
 
 Summary:
+
 - Selects relevant variables for clustering
 - Performs PCA to reduce dimensionality
 - Uses gap statistic to determine optimal number of clusters
@@ -28,71 +34,70 @@ Summary:
 - Merges small clusters based on catch threshold
 
 # Load cleaned data
+
 ```{r}
-EC_clean <- readRDS("outputs/EC_data.RDS")
+EC_clean <- readRDS(here("outputs/EC_data.RDS"))
 stat_list$nrow_total <- nrow(EC_clean)
 ```
 
 ```{r}
 # Will be in another tutorial soon
-EC_clean <- EC_clean %>% 
-	  mutate(
-    total_n = yft_n + alb_n + bet_n,
-    yft_fraction = ifelse(total_n > 0, yft_n / total_n, 0),
-    alb_fraction = ifelse(total_n > 0, alb_n / total_n, 0),
-    bet_fraction = ifelse(total_n > 0, bet_n / total_n, 0)
-  ) %>% 
-	rename(mean_hbf = hbf) %>% 
+EC_clean <- EC_clean %>%
+	mutate(
+		total_n      = yft_n + alb_n + bet_n,
+		yft_fraction = ifelse(total_n > 0, yft_n / total_n, 0),
+		alb_fraction = ifelse(total_n > 0, alb_n / total_n, 0),
+		bet_fraction = ifelse(total_n > 0, bet_n / total_n, 0)
+	) %>%
+	rename(mean_hbf = hbf) %>%
 	filter(!is.na(mean_hbf))
 ```
 
-
 # Define clustering parameters
+
 ```{r}
 # Clustering scenario: yellowfin, bigeye, albacore + hooks between floats
 scenario <- "yba_hbf"
 
 # PCA and kmeans parameters
-pca_variance_threshold <- 0.7  # Retain PCs explaining 70% of variance
-sample_no <- 100              # Sample size for gap statistic
-kmeans_set <- 15               # Number of kmeans replicates
-max_k <- 20                    # Maximum number of clusters to test
-iter_max <- 1e6                # Maximum iterations for kmeans
-nstart <- 10                   # Number of random starts for kmeans
-B_var <- 25                    # Bootstrap replicates for gap statistic
+pca_variance_threshold <- 0.7   # Retain PCs explaining 70% of variance
+sample_no              <- 100   # Sample size per replicate for gap statistic
+kmeans_set             <- 15    # Number of kmeans replicates
+max_k                  <- 20    # Maximum number of clusters to test
+iter_max               <- 1e6   # Maximum iterations for kmeans
+nstart                 <- 10    # Number of random starts for kmeans
+B_var                  <- 25    # Bootstrap replicates for gap statistic
 
 # Cluster merging parameters
-catch_threshold <- 3           # Merge clusters with < 3% of total catch
+catch_threshold <- 3            # Merge clusters with < 3% of total catch
 ```
 
 # Select and prepare variables
+
 ```{r}
-# Select variables based on scenario
 pca_select <- selectScenario(scenario)
 
 cat("Variables selected for clustering:\n")
 print(pca_select)
 
-# Extract and scale selected variables
 select_dat <- EC_clean[, pca_select]
 pca_scaled <- pcaScale(select_dat, method = "zscore")
 ```
 
 # Principal Component Analysis
+
 ```{r}
-# Run PCA with variance threshold
-pca_res <- myPCA(pca_scaled, 
-                 variance_threshold = pca_variance_threshold, 
-                 print_it = FALSE)
+pca_res <- myPCA(pca_scaled,
+				 variance_threshold = pca_variance_threshold,
+				 print_it = FALSE)
 
-cat("PCA retained", pca_res$no_var, "components explaining >=", 
-    pca_variance_threshold * 100, "% of variance\n\n")
+cat("PCA retained", pca_res$no_var, "components explaining >=",
+	pca_variance_threshold * 100, "% of variance\n\n")
 
-# Get PC scores for all data
 pca_full <- pca_res$x[, 1:pca_res$no_var]
 
 # Filter to post-1990 data for clustering
-indices_90 <- which(year(EC_clean$ymd) >= 1990)
+indices_90  <- which(year(EC_clean$ymd) >= 1990)
 pca_full_90 <- pca_full[indices_90, ]
 
 cat("Using", nrow(pca_full_90), "observations from 1990 onwards for clustering\n")
@@ -100,45 +105,42 @@ stat_list$nrow_clustering <- nrow(pca_full_90)
 ```
 
 # Determine optimal number of clusters
+
 ```{r}
-# Generate random samples for gap statistic
 set.seed(123)
 sample_indices <- lapply(1:kmeans_set, function(x) {
-    sample(1:nrow(pca_full_90), size = sample_no, replace = TRUE)
+	sample(1:nrow(pca_full_90), size = sample_no, replace = TRUE)
 })
 
-# Run kmeans on each sample
-cat("\nRunning", kmeans_set, "kmeans replicates on samples of", 
-    sample_no, "observations...\n")
+cat("\nRunning", kmeans_set, "kmeans replicates on samples of",
+	sample_no, "observations...\n")
 
 kmeans_res <- list()
-gap_stat <- list()
+gap_stat   <- list()
 
-for(i in 1:kmeans_set) {
-    sample_ind <- sample_indices[[i]]
-    pca_sub <- pca_full_90[sample_ind, 1:pca_res$no_var]
-    
-    myKmeans_res <- myKmeans(pca_sub, 
-                             max_k = max_k, 
-                             random_set = B_var, 
-                             iter_max = iter_max,
-                             nstart = nstart,
-                             d.power = 2,
-                             defaultGap = TRUE, 
-                             print_it = FALSE)
-    
-    kmeans_res[[i]] <- myKmeans_res[[1]]
-    gap_stat[[i]] <- myKmeans_res[[2]]
+for (i in 1:kmeans_set) {
+	pca_sub <- pca_full_90[sample_indices[[i]], 1:pca_res$no_var]
+
+	res <- customKmeans(pca_sub,
+						max_k      = max_k,
+						random_set = B_var,
+						iter_max   = iter_max,
+						nstart     = nstart,
+						d.power    = 2,
+						print_it   = FALSE)
+
+	kmeans_res[[i]] <- res$kmeans
+	gap_stat[[i]]   <- res$gap_stat
 }
 
 # Determine most common K across replicates
 cluster_counts <- data.frame(
-    cluster_n = sapply(kmeans_res, function(x) length(unique(x$cluster))),
-    replicate = 1:kmeans_set
+	cluster_n = sapply(kmeans_res, function(x) length(unique(x$cluster))),
+	replicate = 1:kmeans_set
 )
 
-freq_table <- table(cluster_counts$cluster_n)
-main_clust_n <- as.numeric(names(freq_table)[which.max(freq_table)])
+freq_table    <- table(cluster_counts$cluster_n)
+main_clust_n  <- as.numeric(names(freq_table)[which.max(freq_table)])
 
 cat("\nCluster number distribution across replicates:\n")
 print(freq_table)
@@ -147,98 +149,96 @@ stat_list$selected_k <- main_clust_n
 ```
 
 ## Standardize cluster number across replicates
+
 ```{r}
-# Rerun samples that didn't converge to main K
 samples_to_rerun <- which(cluster_counts$cluster_n != main_clust_n)
 
-if(length(samples_to_rerun) > 0) {
-    cat("\nRerunning", length(samples_to_rerun), 
-        "replicates with K =", main_clust_n, "\n")
-    
-    for(i in samples_to_rerun) {
-        pca_sub <- pca_full_90[sample_indices[[i]], 1:pca_res$no_var]
-        kmeans_res[[i]] <- kmeans(pca_sub, 
-                                  centers = main_clust_n, 
-                                  iter.max = iter_max, 
-                                  nstart = nstart)
-    }
+if (length(samples_to_rerun) > 0) {
+	cat("\nRerunning", length(samples_to_rerun),
+		"replicates with K =", main_clust_n, "\n")
+
+	for (i in samples_to_rerun) {
+		pca_sub        <- pca_full_90[sample_indices[[i]], 1:pca_res$no_var]
+		kmeans_res[[i]] <- kmeans(pca_sub,
+								  centers  = main_clust_n,
+								  iter.max = iter_max,
+								  nstart   = nstart)
+	}
 }
 ```
 
 # Apply clustering to full dataset
-```{r}
-# Run kmeans on full post-1990 data
-cat("\nRunning kmeans on full dataset with K =", main_clust_n, "\n")
-kmeans_full <- kmeans(pca_full_90, 
-                      centers = main_clust_n, 
-                      iter.max = iter_max, 
-                      nstart = nstart)
 
-# Assign clusters to all data (including pre-1990)
-EC_clean$cluster <- assignClusters(as.data.frame(pca_full), 
-                                   as.data.frame(kmeans_full$centers))
+```{r}
+cat("\nRunning kmeans on full dataset with K =", main_clust_n, "\n")
+kmeans_full <- kmeans(pca_full_90,
+					  centers  = main_clust_n,
+					  iter.max = iter_max,
+					  nstart   = nstart)
+
+EC_clean$cluster <- assignClusters(as.data.frame(pca_full),
+								   as.data.frame(kmeans_full$centers))
 
 cat("Assigned clusters to", nrow(EC_clean), "observations\n")
 ```
 
 # Merge small clusters
+
 ```{r}
-# Calculate catch proportion per cluster
 cluster_summary <- summaryClusters(EC_clean)
 
 cat("\nInitial cluster summary:\n")
 print(knitr::kable(cluster_summary[, c("cluster", "yft_catch", "yft_frac")],
-                   col.names = c("Cluster", "% Total Catch", "% YFT in Cluster"),
-                   digits = 1))
+				   col.names = c("Cluster", "% Total Catch", "% YFT in Cluster"),
+				   digits = 1))
 
-# Identify clusters below threshold
-small_clusters <- cluster_summary %>% 
-    filter(yft_catch < catch_threshold)
+small_clusters <- cluster_summary %>%
+	filter(yft_catch < catch_threshold)
 
-if(nrow(small_clusters) > 0) {
-    cat("\nClusters below", catch_threshold, "% catch threshold:\n")
-    print(small_clusters$cluster)
-    
-    # Reassign small clusters to nearest main cluster
-    main_clusters <- cluster_summary %>% 
-        filter(yft_catch >= catch_threshold) %>% 
-        pull(cluster)
-    
-    main_centroids <- as.data.frame(kmeans_full$centers)[main_clusters, ]
-    
-    EC_clustered <- EC_clean %>% 
-        mutate(cluster = assignClusters(as.data.frame(pca_full), 
-                                       main_centroids)) %>% 
-        orderClusters()
-    
-    stat_list$n_clusters_final <- length(unique(EC_clustered$cluster))
-    
+if (nrow(small_clusters) > 0) {
+	cat("\nClusters below", catch_threshold, "% catch threshold:\n")
+	print(small_clusters$cluster)
+
+	main_clusters  <- cluster_summary %>%
+		filter(yft_catch >= catch_threshold) %>%
+		pull(cluster)
+
+	main_centroids <- as.data.frame(kmeans_full$centers)[main_clusters, ]
+
+	EC_clustered <- EC_clean %>%
+		mutate(cluster = assignClusters(as.data.frame(pca_full),
+										main_centroids)) %>%
+		orderClusters()
+
+	stat_list$n_clusters_final <- length(unique(EC_clustered$cluster))
+
 } else {
-    cat("\nNo clusters below threshold\n")
-    EC_clustered <- EC_clean %>% orderClusters()
-    stat_list$n_clusters_final <- main_clust_n
+	cat("\nNo clusters below threshold\n")
+	EC_clustered <- EC_clean %>% orderClusters()
+	stat_list$n_clusters_final <- main_clust_n
 }
 
 cat("\nFinal number of clusters:", stat_list$n_clusters_final, "\n")
 ```
 
 ## Final cluster summary
+
 ```{r}
 final_summary <- summaryClusters(EC_clustered)
 
 knitr::kable(
-    final_summary[, c("cluster", "yft_n", "total_n", "yft_catch", "yft_frac")],
-    format = "simple",
-    col.names = c("Cluster", "YFT Caught", "Total Catch", 
-                  "% of Total", "% YFT in Cluster"),
-    caption = "Final Cluster Summary",
-    digits = c(0, 0, 0, 1, 1)
+	final_summary[, c("cluster", "yft_n", "total_n", "yft_catch", "yft_frac")],
+	format     = "simple",
+	col.names  = c("Cluster", "YFT Caught", "Total Catch",
+				   "% of Total", "% YFT in Cluster"),
+	caption    = "Final Cluster Summary",
+	digits     = c(0, 0, 0, 1, 1)
 )
 ```
 
 # Save clustered data
-```{r}
-saveRDS(EC_clustered, "outputs/EC_data_clustered.RDS")
 
-cat("\nClustering complete. Data saved to processed/operational_data_clustered.RDS\n")
+```{r}
+saveRDS(EC_clustered, here("outputs/EC_data_clustered.RDS"))
+cat("\nClustering complete. Data saved to outputs/EC_data_clustered.RDS\n")
 ```
