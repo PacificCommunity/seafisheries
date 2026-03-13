@@ -89,6 +89,7 @@
 #' @seealso \code{\link{convert_coordinates_df}} for batch conversion of
 #'   dataframe columns with failure reporting.
 #'
+#' @family coordinate utilities
 #' @export
 convert_coordinate <- function(coord, warnings = TRUE, cardinal = "latitude", format = "auto", .return_reason = FALSE) {
 
@@ -320,7 +321,7 @@ convert_coordinate <- function(coord, warnings = TRUE, cardinal = "latitude", fo
 #'
 #' @seealso \code{\link{convert_coordinate}} for single value conversion and
 #'   details on failure categories.
-#'
+#' @family coordinate utilities
 #' @export
 convert_coordinates_df <- function(df, lat_col = "latitude", lon_col = "longitude",
 								   report = FALSE, format = "auto") {
@@ -409,6 +410,26 @@ convert_coordinates_df <- function(df, lat_col = "latitude", lon_col = "longitud
 	))
 }
 
+#' Check if a value is valid (non-missing, finite)
+#'
+#' Returns TRUE for values that are usable in analysis: not NA, NaN, Inf, or
+#' NULL. For non-numeric input, only checks for NA. Designed for use with
+#' [dplyr::if_all()] to filter rows where all required columns are valid.
+#'
+#' @param x A vector of any type.
+#'
+#' @return A logical vector of the same length as `x`.
+#'
+#' @examples
+#' is_valid(c(1.5, NA, NaN, Inf, -Inf))   # TRUE FALSE FALSE FALSE FALSE
+#' is_valid(c("a", NA, "b"))               # TRUE FALSE TRUE
+#'
+#' # Typical use: filter rows where all required columns are valid
+#' # df %>% filter(if_all(all_of(required_cols), is_valid))
+#'
+#' @family data quality utilities
+#' @export
+
 is_valid <- function(x) {
 	if (is.numeric(x)) {
 		!is.na(x) & !is.nan(x) & is.finite(x) & !is.null(x)
@@ -417,12 +438,55 @@ is_valid <- function(x) {
 	}
 }
 
+#' Report the number of records removed in a cleaning step
+#'
+#' Prints a formatted message to the console describing how many records were
+#' removed and what percentage of the total they represent. Prints nothing if
+#' `n_removed` is zero.
+#'
+#' @param n_removed Integer; number of records removed in this step.
+#' @param n_total Integer; total number of records before this cleaning step.
+#' @param reason Character; short description of why records were removed,
+#'   used in the printed message.
+#'
+#' @return Invisibly returns NULL. Called for its side effect (console output).
+#'
+#' @examples
+#' report_removal(42, 1000, "missing coordinates")
+#' # 42  records removed ( missing coordinates ): 4.2 % of data
+#'
+#' report_removal(0, 1000, "duplicates")
+#' # (prints nothing)
+#'
+#' @family data quality utilities
+#' @export
+
 report_removal <- function(n_removed, n_total, reason) {
 	if(n_removed > 0) {
 		cat(n_removed, " records removed (", reason, "):",
 			round(n_removed / n_total * 100, 2), "% of data\n")
 	}
 }
+
+#' Round coordinate to nearest 0.5-degree grid cell center
+#'
+#' Maps a decimal degree coordinate to the center of its containing 1x1 degree
+#' SEAPODYM grid cell. Grid cells are centered at X.5 (e.g., 0.5, 1.5, -0.5,
+#' -1.5), so any value in \[N, N+1) maps to N.5.
+#'
+#' @param x Numeric value or vector (latitude or longitude in decimal degrees).
+#'
+#' @return Numeric vector of the same length as `x`, with each value equal to
+#'   `floor(x) + 0.5`.
+#'
+#' @examples
+#' roundTo.5(3.7)    # 3.5
+#' roundTo.5(3.2)    # 3.5
+#' roundTo.5(-1.3)   # -1.5
+#' roundTo.5(-1.7)   # -1.5
+#'
+#' @family coordinate utilities
+#' @export
 
 roundTo.5 <- function(x){
 	floor(x) + 0.5

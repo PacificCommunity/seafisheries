@@ -1,10 +1,10 @@
 
-# seapodymClusterFisheries
+# seafisheries
 
 <!-- badges: start -->
 <!-- badges: end -->
 
-The goal of seapodymClusterFisheries is to ...
+The goal of seafisheries is to ...
 
 
 ## Getting started
@@ -15,10 +15,10 @@ run in order and each one produces objects used by the next.
 To access the vignettes after installing the package:
 ```r
 # List available vignettes
-vignette(package = "seapodymClusterFisheries")
+vignette(package = "seafisheries")
 
 # Open a specific vignette
-vignette("setup", package = "seapodymClusterFisheries")
+vignette("setup", package = "seafisheries")
 ```
 
 Alternatively, open the `.qmd` files directly in RStudio from the `vignettes/`

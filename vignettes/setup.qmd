@@ -12,7 +12,7 @@ vignette: >
 
 ```{r, echo = F, warning = F, message = F, warning = FALSE}
 knitr::opts_chunk$set(eval = TRUE, echo = TRUE, message = FALSE, warning = FALSE)
-library(seapodymClusterFisheries)
+library(seafisheries)
 library(ggplot2)
 library(dplyr)
 library(reshape2)
@@ -23,7 +23,7 @@ library(reshape2)
 # Naming conventions
 
 
-```{r}
+```{r, echo = F}
 # To redo when done with naming convention
 keywords_table <- data.frame("name" = c("captain",
 										"obs",
@@ -60,7 +60,7 @@ knitr::kable(keywords_table, caption = "Keywords")
 
 ```
 
-```{r}
+```{r, echo = F}
 country_correspondence <- data.frame(
   code = c("AS"," AU", "BZ", "CK", "CN", "ES", "FJ", "FM", "FR", "ID", "JP", "KI", "KR", "MH", "NC", "NU", "NZ", "PF", "PG", "PH", "PT", "PW", "SB", "TO", "TV", "TW", "US", "VN", "VU", "WS"),
   country = c(
@@ -139,7 +139,7 @@ The study area is determined by the mask below (ERA5 landmask). It corresponds t
 
 ```{r}
 pmask <- scan(system.file("extdata/masks/mask_era5_np_1deg_po_cor_noIO.txt", 
-                           package = "seapodymClusterFisheries"))
+                           package = "seafisheries"))
 pmask <- matrix(pmask, ncol = 200, byrow = T)
 rownames(pmask) <- lat_range[2]:lat_range[1]
 colnames(pmask) <- lon_range[1]:lon_range[2]
@@ -165,7 +165,7 @@ pmask_lookup <- which(pmask > 0, arr.ind = TRUE) |>
 
 
 p5mask <- scan(system.file("extdata/masks/mask_era5_np_5deg_po_cor_noIO.txt", 
-                           package = "seapodymClusterFisheries"))
+                           package = "seafisheries"))
 p5mask <- matrix(p5mask, ncol = 40, byrow = T)
 rownames(p5mask) <- seq(lat_range[2]-2, lat_range[1]-2, -5)
 colnames(p5mask) <- seq(lon_range[1]-2, lon_range[2]-2, 5)
@@ -188,6 +188,7 @@ p5mask_lookup <- which(p5mask > 0, arr.ind = TRUE) |>
     dplyr::mutate(latCent = as.numeric(rownames(p5mask)[row]),
                   lonCent = as.numeric(colnames(p5mask)[col])) |>
     dplyr::select(latCent, lonCent)
+
 ```
 
 ## Temperature
@@ -206,7 +207,7 @@ An additional ERA5 temperature mask is applied to the data to remove all catch m
 min_temp <- 10
 
 temp_mask <- readRDS(system.file("extdata/masks/temp_mask.RDS",
-                                  package = "seapodymClusterFisheries"))
+                                  package = "seafisheries"))
 
 temp_mask_lookup <- temp_mask |>
     dplyr::filter(temperature >= min_temp) |>

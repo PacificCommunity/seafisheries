@@ -10,11 +10,15 @@ vignette: >
   %\VignetteEncoding{UTF-8}
 ---
 ```{r, warning=FALSE, message=F, echo=FALSE}
-# setwd(dir = "example")
-library(seapodymClusterFisheries)
+library(seafisheries)
+library(dplyr)
+library(stringr)
 stat_list <- list()
-pmask_lookup <- readRDS(system.file("extdata/outputs/pmask_lookup.RDS", 
-                                     package = "seapodymClusterFisheries"))
+pmask_lookup <- readRDS(system.file("extdata/outputs/pmask_lookup.RDS",
+                                     package = "seafisheries"))
+library(here)
+dir.create(here("outputs"), showWarnings = FALSE, recursive = TRUE)
+
 ```
 This document shows the process of formatting operational data to something usable with models. Using as example the yellowfin captain's and observer's logbooks
 
@@ -38,12 +42,12 @@ This uses a fake data set of longline data. This especially contains hooks betwe
 
 ```{r}
 EC_raw <- readRDS(system.file("extdata/mockData/operational_data.RDS", 
-                               package = "seapodymClusterFisheries"))
+                               package = "seafisheries"))
 # EC_raw <- read.csv("/home/romainf/Documents/FisheriesDatabases/operational_captain_longline_logsheet_catch_effort_data_yft_bet_skj_oth.csv")
 stat_list$nrow_init <- nrow(EC_raw)
 
 # Rename columns to standard nomenclature
-EC_raw <- EC_raw %>% 
+EC_raw <- EC_raw |> 
 	rename(yft_w = yft_sp_weight_kg,
 		   yft_n = yft_sp_nb,
 		   yft_n_est = yft_sp_nb_est,
@@ -64,7 +68,7 @@ EC_raw <- EC_raw %>%
 		   ymd = set_date)
 
 # Convert units: weight to metric tons, effort to hundreds of hooks
-EC_raw <- EC_raw %>% 
+EC_raw <- EC_raw |> 
 	mutate(across(c(E, hbf, yft_n, yft_w, skj_n, skj_w, 
 					bet_n, bet_w, alb_n, alb_w, 
 					oth_n, oth_w), as.numeric),
@@ -83,7 +87,7 @@ EC_raw <- read.csv("/home/romainf/Documents/FisheriesDatabases/operational_obser
 stat_list$nrow_init <- nrow(EC_raw)
 
 #name convention
-EC_raw <- EC_raw %>% 
+EC_raw <- EC_raw |> 
 	rename(flag = flag_id,
 		   latitude = lat,
 		   longitude = lon,
@@ -102,7 +106,7 @@ EC_raw <- EC_raw %>%
 		   ymd = set_date)
 
 # Convert units: weight to metric tons, effort to hundreds of hooks
-EC_raw <- EC_raw %>% 
+EC_raw <- EC_raw |> 
 	mutate(across(c(E, hbf, yft_n, yft_w, skj_n, skj_w, 
 					bet_n, bet_w, alb_n, alb_w, 
 					oth_n, oth_w), as.numeric),
@@ -124,7 +128,7 @@ EC_raw <- res$data
 print(res$summary)
 # View(res$failures)
 
-EC_raw <- EC_raw %>% 
+EC_raw <- EC_raw |> 
 	mutate(
 		latCent = roundTo.5(latitude),
 		lonCent = roundTo.5(longitude)
@@ -137,7 +141,7 @@ EC_raw <- EC_raw %>%
 required_cols <- c("ymd", "latitude", "longitude", "E", "yft_n", "skj_n", 
 				   "bet_n", "alb_n", "oth_n")
 
-EC_raw <- EC_raw %>%
+EC_raw <- EC_raw |>
 	filter(if_all(all_of(required_cols), is_valid))
 
 stat_list$nrow_noNA <- nrow(EC_raw)
@@ -167,7 +171,7 @@ stat_list$hbf_gt_threshold <- sum(EC_raw$hbf > hbf_threshold, na.rm = TRUE)
 stat_list$hbf_le0 <- sum(EC_raw$hbf <= 0, na.rm = TRUE)
 
 # Flag outliers > 50
-EC_raw <- EC_raw %>%
+EC_raw <- EC_raw |>
 	mutate(hbf_outlier = hbf > hbf_threshold)
 
 if(stat_list$hbf_gt_threshold > 0) {
@@ -176,7 +180,7 @@ if(stat_list$hbf_gt_threshold > 0) {
 }
 
 # Convert invalid HBF (≤ 0) to NA
-EC_raw <- EC_raw %>%
+EC_raw <- EC_raw |>
 	mutate(hbf = ifelse(hbf <= 0, NA, hbf))
 
 if(stat_list$hbf_le0 > 0) {
@@ -194,7 +198,7 @@ cat("HBF summary: ", stat_list$hbf_valid, " valid,",
 ## Remove dummy fisheries (positive catch with zero effort)
 
 ```{r}
-dummy_fisheries <- EC_raw %>% filter(yft_n > 0 & E == 0)
+dummy_fisheries <- EC_raw |> filter(yft_n > 0 & E == 0)
 stat_list$dummy_fisheries <- nrow(dummy_fisheries)
 
 # if(stat_list$dummy_fisheries > 0) {
@@ -204,13 +208,13 @@ stat_list$dummy_fisheries <- nrow(dummy_fisheries)
 report_removal(stat_list$dummy_fisheries, stat_list$nrow_init, 
 			   "dummy fisheries (catch > 0, effort = 0)")
 
-EC_raw <- EC_raw %>% filter(!(yft_n > 0 & E == 0))
+EC_raw <- EC_raw |> filter(!(yft_n > 0 & E == 0))
 ```
 
 ## Remove zero fisheries (zero catch AND zero effort)
 
 ```{r}
-zero_fisheries <- EC_raw %>% filter(yft_n == 0 & E == 0)
+zero_fisheries <- EC_raw |> filter(yft_n == 0 & E == 0)
 stat_list$zero_fisheries <- nrow(zero_fisheries)
 
 # if(stat_list$zero_fisheries > 0) {
@@ -220,7 +224,7 @@ stat_list$zero_fisheries <- nrow(zero_fisheries)
 report_removal(stat_list$zero_fisheries, stat_list$nrow_init, 
 			   "zero fisheries (catch = 0, effort = 0)")
 
-EC_raw <- EC_raw %>% filter(!(yft_n == 0 & E == 0))
+EC_raw <- EC_raw |> filter(!(yft_n == 0 & E == 0))
 ```
 
 ## Remove effort outliers (beyond 3 standard deviations)
@@ -228,7 +232,7 @@ EC_raw <- EC_raw %>% filter(!(yft_n == 0 & E == 0))
 ```{r}
 nrow_before <- nrow(EC_raw)
 
-EC_raw <- EC_raw %>%
+EC_raw <- EC_raw |>
 	filter(abs(E - mean(E, na.rm = TRUE)) <= 3 * sd(E, na.rm = TRUE))
 
 stat_list$outliers_effort <- nrow_before - nrow(EC_raw)
@@ -239,7 +243,7 @@ report_removal(stat_list$outliers_effort, stat_list$nrow_init,
 ## Clean vessel names (remove trailing spaces)
 
 ```{r}
-EC_raw <- EC_raw %>%
+EC_raw <- EC_raw |>
 	mutate(vesselname = str_trim(vesselname, side = "right"))
 ```
 
@@ -247,7 +251,7 @@ EC_raw <- EC_raw %>%
 
 ```{r}
 nrow_before <- nrow(EC_raw)
-EC_raw <- EC_raw %>% distinct()
+EC_raw <- EC_raw |> distinct()
 stat_list$duplicates <- nrow_before - nrow(EC_raw)
 
 report_removal(stat_list$duplicates, stat_list$nrow_init, "duplicates")
@@ -256,9 +260,9 @@ report_removal(stat_list$duplicates, stat_list$nrow_init, "duplicates")
 # Apply Pacific Ocean mask
 
 ```{r}
-EC_masked <- EC_raw %>%
+EC_masked <- EC_raw |>
 	filter(latCent >= lat_range[1] & latCent <= lat_range[2], 
-		   lonCent >= lon_range[1] & lonCent <= lon_range[2]) %>%
+		   lonCent >= lon_range[1] & lonCent <= lon_range[2]) |>
 	semi_join(pmask_lookup, by = c("latCent", "lonCent"))
 
 mask_outliers <- anti_join(EC_raw, EC_masked, 
@@ -277,7 +281,7 @@ stat_list$nrow_clean <- nrow(EC_raw)
 ```
 
 ```{r}
-saveRDS(EC_raw,"outputs/EC_data.RDS")
+saveRDS(EC_raw, here("outputs/EC_data.RDS"))
 ```
 
 

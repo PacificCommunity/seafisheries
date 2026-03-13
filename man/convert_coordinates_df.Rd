@@ -93,4 +93,9 @@ convert_coordinates_df(df2, lat_col = "lat", lon_col = "lon")
 \seealso{
 \code{\link{convert_coordinate}} for single value conversion and
 details on failure categories.
+
+Other coordinate utilities: 
+\code{\link{convert_coordinate}()},
+\code{\link{roundTo.5}()}
 }
+\concept{coordinate utilities}

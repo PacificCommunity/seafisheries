@@ -11,7 +11,6 @@ vignette: >
 ---
 
 ```{r, echo = F, warning = F, message = F, warning = FALSE}
-source("../myLibrary.r")
 knitr::opts_chunk$set(eval = T, echo = F, message = F, warning = F)
 
 ```
