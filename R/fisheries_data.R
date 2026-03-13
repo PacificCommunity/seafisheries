@@ -356,13 +356,13 @@ convert_coordinates_df <- function(df, lat_col = "latitude", lon_col = "longitud
 	)
 
 	# Join back to dataframe
-	df_out <- df %>%
-		left_join(converted_lats, by = setNames("orig_lat", lat_col)) %>%
-		left_join(converted_lons, by = setNames("orig_lon", lon_col)) %>%
+	df_out <- df |>
+		left_join(converted_lats, by = stats::setNames("orig_lat", lat_col)) |>
+		left_join(converted_lons, by = stats::setNames("orig_lon", lon_col)) |>
 		mutate(
 			!!lat_col := lat_converted,
 			!!lon_col := lon_converted
-		) %>%
+		) |>
 		select(-lat_converted, -lon_converted, -lat_reason, -lon_reason)
 
 	if (!report) {
@@ -371,26 +371,26 @@ convert_coordinates_df <- function(df, lat_col = "latitude", lon_col = "longitud
 
 	# Build failure reports
 	build_summary <- function(converted_df, reason_col, orig_col, type) {
-		failures <- converted_df %>%
-			filter(!is.na(.data[[reason_col]])) %>%
+		failures <- converted_df |>
+			filter(!is.na(.data[[reason_col]])) |>
 			rename(original = !!orig_col, reason = !!reason_col)
 
 		if (nrow(failures) == 0) {
 			return(list(summary = NULL, failures = NULL))
 		}
 
-		summary <- failures %>%
-			group_by(reason) %>%
+		summary <- failures |>
+			group_by(reason) |>
 			summarise(
 				count = n(),
 				examples = paste(head(original, 3), collapse = ", "),
 				.groups = "drop"
-			) %>%
-			mutate(type = type) %>%
+			) |>
+			mutate(type = type) |>
 			select(type, reason, count, examples)
 
-		failures <- failures %>%
-			mutate(type = type) %>%
+		failures <- failures |>
+			mutate(type = type) |>
 			select(type, original, reason)
 
 		list(summary = summary, failures = failures)

@@ -11,69 +11,16 @@ vignette: >
 ---
 
 ```{r, echo = F, warning = F, message = F, warning = FALSE}
-source("../myLibrary.r")
-knitr::opts_chunk$set(eval = T, echo = F, message = F, warning = F)
-
-fig_width <- 20
-fig_height <- 16
-
-options(tibble.print_max = 50)
+knitr::opts_chunk$set(eval = TRUE, echo = TRUE, message = FALSE, warning = FALSE)
+library(seapodymClusterFisheries)
+library(ggplot2)
+library(dplyr)
+library(reshape2)
 
 ```
 
 
 # Naming conventions
-
-
-```{r, eval = F}
-# not sure is needed at the moment
-summary_table <- data.frame("name" = c("captain_LL_raw",
-									   "captain_LL_1x1",
-									   # "captain_LL_flags",
-									   "captain_LL_outliers_mask",
-									   "captain_LL_outliers_effort",
-									   "captain_LL_ghostFisheries",
-									   "captain_LL_beforeAgg",
-									   "obs_LL_raw",
-									   "obs_LL_1x1",
-									   "obs_LL_flags",
-									   "obs_LL_outliers_mask",
-									   "obs_LL_outliers_effort",
-									   "obs_LL_ghostFisheries",
-									   "obs_LL_before_Agg",
-									   "LL_1x1",
-									   "aggregated_LL_5x5",
-									   "delta_LL_5x5",
-									   "aggregated_PS_1x1",
-									   "CL_raw",
-									   "CL_1x1",
-									   "CL_correctLenght"),
-							"content" = c("logsheets at .01 degrees resolution (hbf,hnb, nb, kg) for all species",
-										  "logsheets aggregated to 1 degree resolution in the PO and summed over time (y-m)(effort, nb, kg)",
-										  # "logsheets aggregated 1x1 with flag IDs",
-										  "outliers not present in the pacific area",
-										  "outliers with 0 catch and 0 effort",
-										  "outliers with positive catch and 0 effort",
-										  "logsheets with no outliers",
-										  "logbooks at .01 degrees resolution (hbf,hnb, nb, kg)",
-										  "logbooks aggregated to 1 degree resolution in the PO and summed over time (y-m-d)(effort, nb, kg)",
-										  "logbooks aggregated 1x1 with flag IDs",
-										  "logbooks not present in the pacific area",
-										  "logbooks with effort anomalies",
-										  "logbooks with catch without effort",
-										  "logbooks with no outliers",
-										  "aggregated database at 1 degrees of logbooks and logsheets",
-										  "aggregated database at 5 degrees resolution without groups/sums",
-										  "difference between LL_1x1 and aggregated database in 5x5 for LL",
-										  "aggregated database at 1 degrees of PS",
-										  "catch/length at .0001 degrees resolution in the PO",
-										  "catch/length aggregated to 1 degree resolution with mean length",
-										  "catch/length non aggregated with all length to UF")
-							
-)
-
-knitr::kable(summary_table, caption = "Saved files", format = "html")
-```
 
 
 ```{r}
@@ -155,7 +102,6 @@ knitr::kable(country_correspondence, caption = "Country flags")
 
 ```
 
-# Naming comvention
 
 yft = yellowfin
 
@@ -192,7 +138,8 @@ FLAG is the vessel nationality and FLEET is a subset within that FLAG – usuall
 The study area is determined by the mask below (ERA5 landmask). It corresponds to the climate forcings and model configurations. The corners of the Pacific model domain are 89E-71W, 55S-65N, the resolution 1 degree, so the mask dimension is 200x120.
 
 ```{r}
-pmask <- scan("masks/mask_era5_np_1deg_po_cor_noIO.txt")
+pmask <- scan(system.file("extdata/masks/mask_era5_np_1deg_po_cor_noIO.txt", 
+                           package = "seapodymClusterFisheries"))
 pmask <- matrix(pmask, ncol = 200, byrow = T)
 rownames(pmask) <- lat_range[2]:lat_range[1]
 colnames(pmask) <- lon_range[1]:lon_range[2]
@@ -203,50 +150,71 @@ p_mask <- ggplot(plot_dat) +
 	geom_tile(aes(x = Var2, y = Var1, fill = as.factor(value)), width = 1, height = 1) +
 	scale_fill_manual(values = c("chocolate3", "dodgerblue1","dodgerblue2","dodgerblue3")) +
 	map_bg() +
-	coord_labels +
+	coord_labels() +
 	coord_fixed(xlim = lon_range, ylim = lat_range) +
-	myTheme() +
+	customTheme() +
 	theme(legend.position = "none")
 
 print(p_mask)
-# ggsave("figures/map_mask.png", plot = p_mask, units = "cm", width = fig_width, height = fig_height)
 
-# Pre-process pmask into a lookup dataframe for faster processing
-pmask_lookup <- which(pmask > 0, arr.ind = TRUE) %>%
-	as_tibble() %>%
-	mutate(latCent = as.numeric(rownames(pmask)[row]),
-		   lonCent = as.numeric(colnames(pmask)[col])) %>%
-	dplyr::select(latCent, lonCent)
-saveRDS(pmask_lookup,"outputs/pmask_lookup.RDS")
+pmask_lookup <- which(pmask > 0, arr.ind = TRUE) |>
+    as.data.frame() |>
+    dplyr::mutate(latCent = as.numeric(rownames(pmask)[row]),
+                  lonCent = as.numeric(colnames(pmask)[col])) |>
+    dplyr::select(latCent, lonCent)
 
-p5mask <- scan("masks/mask_era5_np_5deg_po_cor_noIO.txt")
+
+p5mask <- scan(system.file("extdata/masks/mask_era5_np_5deg_po_cor_noIO.txt", 
+                           package = "seapodymClusterFisheries"))
 p5mask <- matrix(p5mask, ncol = 40, byrow = T)
 rownames(p5mask) <- seq(lat_range[2]-2, lat_range[1]-2, -5)
 colnames(p5mask) <- seq(lon_range[1]-2, lon_range[2]-2, 5)
-p5mask_lookup <- which(p5mask > 0, arr.ind = TRUE) %>%
-	as_tibble() %>%
-	mutate(latCent = as.numeric(rownames(p5mask)[row]),
-		   lonCent = as.numeric(colnames(p5mask)[col])) %>%
-	dplyr::select(latCent, lonCent)
+
+plot_dat <- reshape2::melt(pmask)
+
+p5_mask <- ggplot(plot_dat) +
+	geom_tile(aes(x = Var2, y = Var1, fill = as.factor(value)), width = 5, height = 5) +
+	scale_fill_manual(values = c("chocolate3", "dodgerblue1","dodgerblue2","dodgerblue3")) +
+	map_bg() +
+	coord_labels() +
+	coord_fixed(xlim = lon_range, ylim = lat_range) +
+	customTheme() +
+	theme(legend.position = "none")
+
+print(p5_mask)
+
+p5mask_lookup <- which(p5mask > 0, arr.ind = TRUE) |>
+    as.data.frame() |>
+    dplyr::mutate(latCent = as.numeric(rownames(p5mask)[row]),
+                  lonCent = as.numeric(colnames(p5mask)[col])) |>
+    dplyr::select(latCent, lonCent)
 ```
 
 ## Temperature
 An additional ERA5 temperature mask is applied to the data to remove all catch made in waters below 10 C. It works for the data up until the end of 2022.
 
-```{r}
-temp_dym <- dym::read.var.dym("masks/po_era5np_1x30d_T_L1_1959_2022.dym")
-temp_arr <- temp_dym$var
-dimnames(temp_arr) <- list("time" = as.character(temp_dym$t),
-						   "longitude" = temp_dym$x,
-						   "latitude" = temp_dym$y)
-temp_mask <- reshape2::melt(temp_arr) %>% 
-	# mutate(years = floor(time),
-	# 	   months = floor((time - years) * 12) + 1,
-	# 	   ymd = as.Date(paste0(years, "-", months, "-", 15))) %>% 
-	# dplyr::select(-time,-years,-months) %>% 
-	rename(temperature = value,
-		   ymd = time)
+```{r, eval = F}
+# The temperature mask is built from a monthly ERA5 sea surface temperature
+# file in SEAPODYM's .dym format. The dym library and the source .dym files
+# are available at: https://github.com/pacificcommunity/seapodym-codebase
+#
+# To rebuild temp_mask.RDS from the source file, see data-raw/build_temp_mask.R
+# The pre-built mask (1959-2022, 1 degree resolution) is provided in the package.
 ```
+
+```{r}
+min_temp <- 10
+
+temp_mask <- readRDS(system.file("extdata/masks/temp_mask.RDS",
+                                  package = "seapodymClusterFisheries"))
+
+temp_mask_lookup <- temp_mask |>
+    dplyr::filter(temperature >= min_temp) |>
+    dplyr::select(ymd, latCent, lonCent)
+```
+
+
+
 
 
 

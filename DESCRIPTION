@@ -13,7 +13,9 @@ RoxygenNote: 7.3.2
 Imports:
     dplyr,
     rlang,
-    stringr
+    stringr,
+    ggplot2,
+    maps
 Suggests:
     knitr,
     rmarkdown

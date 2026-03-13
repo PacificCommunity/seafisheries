@@ -2,7 +2,7 @@
 .Rproj
 *.pdf
 outputs/
-R/myLibrary.r
+data-raw/*
 .Rhistory
 .Rdata
 .httr-oauth

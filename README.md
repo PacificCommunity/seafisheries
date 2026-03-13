@@ -6,20 +6,35 @@
 
 The goal of seapodymClusterFisheries is to ...
 
-## Installation
 
-You can install the development version of seapodymClusterFisheries like so:
+## Getting started
 
-``` r
-# FILL THIS IN! HOW CAN PEOPLE INSTALL YOUR DEV PACKAGE?
+Vignettes are the main entry point for this package. They are designed to be
+run in order and each one produces objects used by the next.
+
+To access the vignettes after installing the package:
+```r
+# List available vignettes
+vignette(package = "seapodymClusterFisheries")
+
+# Open a specific vignette
+vignette("setup", package = "seapodymClusterFisheries")
 ```
 
-## Example
+Alternatively, open the `.qmd` files directly in RStudio from the `vignettes/`
+folder and run them interactively block by block.
 
-This is a basic example which shows you how to solve a common problem:
+### Vignette order
 
-``` r
-library(seapodymClusterFisheries)
-## basic example code
+| # | File | Description |
+|---|------|-------------|
+| 01 | `setup.qmd` | Load spatial masks and set up the environment. Run this first. |
+| 02 | `operational_data.qmd` | Clean and format raw fisheries logbook data. |
+| 03 | `clusters.qmd` | Cluster cleaned data to identify fishing strategies. |
+
+### Installation
+```r
+# install.packages("devtools")
+devtools::install_github("your-org/seapodym-clusterFisheries",
+                          build_vignettes = TRUE)
 ```
-
