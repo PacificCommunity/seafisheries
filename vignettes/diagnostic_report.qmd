@@ -1,0 +1,324 @@
+---
+title: 04 Clustering diagnostic report
+author: Romain Forestier
+editor_options: 
+  chunk_output_type: console
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{04 Clustering diagnostic report}
+  %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
+---
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+library(seafisheries)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(cluster)
+library(here)
+
+# Load clustered data and diagnostics produced by clusters.qmd
+EC_clustered       <- readRDS(here("outputs/EC_data_clustered.RDS"))
+cluster_diagnostics <- readRDS(here("outputs/cluster_diagnostics.RDS"))
+
+# Unpack diagnostics into the local environment
+list2env(cluster_diagnostics, envir = environment())
+# Available: pca_res, pca_select, pca_variance_threshold, scenario,
+#            gap_stat, kmeans_res, sample_indices, freq_df, stat_list
+
+# Recompute scaled PCA input from the saved clustered data.
+# EC_clustered retains all original columns, so pca_select still applies.
+select_dat <- EC_clustered[, pca_select]
+pca_scaled <- pcaScale(select_dat, method = "zscore")
+
+# Project through the saved pca_res (avoids re-fitting; results are identical
+# to the original run as long as EC_clustered hasn't changed).
+pca_full    <- predict(pca_res, newdata = pca_scaled)
+indices_90  <- which(year(EC_clustered$ymd) >= 1990)
+pca_full_90 <- pca_full[indices_90, 1:pca_res$no_var]
+
+kmeans_set <- length(kmeans_res)
+max_k      <- nrow(gap_stat[[1]])
+```
+
+This report summarises the clustering run produced by vignette 03.
+It loads pre-computed objects directly — no clustering is re-run here.
+
+# Run parameters
+
+```{r params_table}
+params_df <- data.frame(
+	Parameter = c("Scenario", "PCA variance threshold", "Sample size per replicate",
+				  "K-means replicates", "Max K tested", "Bootstrap replicates (gap)",
+				  "Catch threshold for merging (%)"),
+	Value = c(scenario,
+			  pca_variance_threshold,
+			  stat_list$nrow_clustering / kmeans_set,  # sample_no not stored; derive
+			  kmeans_set,
+			  max_k,
+			  length(gap_stat[[1]]),                   # B_var = nrow of gap mat - max_k
+			  NA)                                       # catch_threshold not stored
+)
+# Note: sample_no and catch_threshold are not in cluster_diagnostics.
+# Add them to stat_list in clusters.qmd if you need them here.
+knitr::kable(params_df[!is.na(params_df$Value), ], row.names = FALSE,
+			 caption = "Clustering parameters")
+```
+
+```{r params_counts}
+counts_df <- data.frame(
+	Item = c("Total observations", "Observations used for clustering (>=1990)",
+			 "K selected", "Final number of clusters"),
+	Value = c(stat_list$nrow_total,
+			  stat_list$nrow_clustering,
+			  stat_list$selected_k,
+			  stat_list$n_clusters_final)
+)
+knitr::kable(counts_df, row.names = FALSE, caption = "Data and cluster counts")
+```
+
+# PCA
+
+## Loadings
+
+```{r pca_loadings}
+# Loadings are available directly from the saved pca_res object.
+loadings_df <- as.data.frame(pca_res$rotation[, 1:pca_res$no_var])
+knitr::kable(round(loadings_df, 3), caption = "PCA loadings (retained components)")
+```
+
+## Variance explained
+
+```{r pca_variance, fig.height=4}
+var_explained <- (pca_res$sdev^2) / sum(pca_res$sdev^2)
+cumvar        <- cumsum(var_explained)
+
+var_df <- data.frame(
+	PC      = seq_along(var_explained),
+	var     = var_explained,
+	cum_var = cumvar
+)
+
+ggplot(var_df, aes(x = PC)) +
+	geom_col(aes(y = var), fill = "steelblue", alpha = 0.7) +
+	geom_line(aes(y = cum_var), colour = "firebrick", linewidth = 0.8) +
+	geom_point(aes(y = cum_var), colour = "firebrick", size = 2) +
+	geom_hline(yintercept = pca_variance_threshold,
+			   linetype = "dashed", colour = "grey40") +
+	scale_y_continuous(labels = scales::percent_format()) +
+	labs(x = "Principal component", y = "Variance explained",
+		 title = sprintf("Cumulative variance — %d PCs retained at %.0f%% threshold",
+		 				pca_res$no_var, pca_variance_threshold * 100)) +
+	theme_bw()
+```
+
+## Diagnostic plots
+
+```{r pca_diag_plots}
+# Assumption: myPCA() with print_it = TRUE generates a loading biplot and
+# a PC scatter plot inline. If your version uses return_print = TRUE instead,
+# replace this call with:
+#   pca_prints <- myPCA(pca_scaled, variance_threshold = pca_variance_threshold,
+#                        print_it = FALSE, return_print = TRUE)
+#   print(pca_prints$loading_plot)
+#   print(pca_prints$scatter_plot)
+myPCA(pca_scaled, variance_threshold = pca_variance_threshold, print_it = TRUE)
+```
+
+# Gap statistics
+
+## Cluster count frequency across replicates
+
+```{r gap_freq_table}
+knitr::kable(
+	freq_df %>% arrange(desc(freq)),
+	col.names = c("N clusters", "Frequency"),
+	caption   = sprintf("K selected = %d (most frequent across %d replicates)",
+						stat_list$selected_k, kmeans_set)
+)
+```
+
+## Gap statistic plots
+
+One plot per replicate. The vertical line marks the K selected by the
+Tibshirani 2001 SE rule.
+
+```{r gap_plots, fig.height=3, fig.width=5, results='hide'}
+for (i in seq_along(gap_stat)) {
+	nc <- cluster::maxSE(
+		f        = gap_stat[[i]][, "gap"],
+		SE.f     = gap_stat[[i]][, "SE.sim"],
+		method   = "Tibs2001SEmax",
+		SE.factor = 1
+	)
+	plot_gap <- data.frame(
+		k   = factor(seq_len(max_k)),
+		gap = gap_stat[[i]][, "gap"],
+		sd  = gap_stat[[i]][, "SE.sim"]
+	)
+	p <- ggplot(plot_gap, aes(x = k, y = gap)) +
+		geom_point() +
+		geom_errorbar(aes(ymin = gap - sd, ymax = gap + sd), width = 0.3) +
+		geom_vline(xintercept = nc, colour = "firebrick", linetype = "dashed") +
+		labs(title = sprintf("Replicate %d  —  K = %d", i, nc),
+			 x = "K", y = "Gap statistic") +
+		theme_bw()
+	print(p)
+}
+```
+
+# Clustering performance
+
+```{r perf_setup}
+# Extract final cluster labels for the >=1990 subset
+cluster_90 <- EC_clustered$cluster[indices_90]
+nc         <- length(unique(cluster_90))
+```
+
+## Silhouette indices
+
+Silhouette computed on each replicate's sample (same `sample_indices` used
+during clustering), averaged per cluster.
+
+```{r silhouette_table}
+if (nc > 1) {
+	sil_avg <- do.call(rbind, lapply(seq_len(kmeans_set), function(i) {
+		pca_sub  <- pca_full_90[sample_indices[[i]], ]
+		clusters <- as.integer(cluster_90[sample_indices[[i]]])
+		sil      <- cluster::silhouette(x    = clusters,
+										dist = dist(pca_sub, method = "euclidean"))
+		as.data.frame(sil) %>%
+			mutate(sample = i)
+	})) %>%
+		group_by(cluster) %>%
+		summarise(sil_avg = mean(sil_width),
+				  sil_sd  = sd(sil_width),
+				  .groups = "drop")
+
+	knitr::kable(sil_avg,
+				 col.names = c("Cluster", "Mean silhouette", "SD"),
+				 digits    = 3,
+				 caption   = "Average silhouette width per cluster across replicates")
+} else {
+	cat("Single cluster — silhouette not applicable.\n")
+}
+```
+
+```{r silhouette_plot, fig.height=4}
+if (nc > 1) {
+	ggplot(sil_avg, aes(x = factor(cluster), y = sil_avg)) +
+		geom_point(size = 3) +
+		geom_errorbar(aes(ymin = sil_avg - sil_sd,
+						  ymax = sil_avg + sil_sd), width = 0.2) +
+		geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50") +
+		labs(x = "Cluster", y = "Mean silhouette width") +
+		theme_bw()
+}
+```
+
+## Dunn index
+
+Averaged across replicates. Requires the `clValid` package
+(`install.packages("clValid")` — add to `Suggests` in DESCRIPTION).
+
+```{r dunn}
+if (nc > 1) {
+	if (!requireNamespace("clValid", quietly = TRUE)) {
+		cat("clValid not installed — Dunn index skipped.\n")
+	} else {
+		dunn_indices <- vapply(seq_len(kmeans_set), function(i) {
+			pca_sub  <- pca_full_90[sample_indices[[i]], ]
+			clusters <- as.integer(cluster_90[sample_indices[[i]]])
+			clValid::dunn(distance = dist(pca_sub, method = "euclidean"),
+						  clusters = clusters)
+		}, numeric(1))
+
+		cat(sprintf("Dunn index: mean = %.4f  (sd = %.4f, n = %d replicates)\n",
+					mean(dunn_indices), sd(dunn_indices), kmeans_set))
+	}
+} else {
+	cat("Single cluster — Dunn index not applicable.\n")
+}
+```
+
+# Cluster assignment before and after merging
+
+`cluster_init` holds the raw k-means labels before small clusters were merged
+into the nearest large one. `cluster` holds the final, ordered labels.
+
+## Variable distributions — before merging
+
+```{r before_merge_summary}
+EC_before <- EC_clustered %>% mutate(cluster = cluster_init)
+table_before <- summaryClusters(EC_before)
+
+split_at <- floor(ncol(table_before) / 2) + 1
+knitr::kable(table_before[, 1:split_at],
+			 digits  = 1,
+			 caption = "Before merging (part 1)")
+knitr::kable(table_before[, c(1, (split_at + 1):ncol(table_before))],
+			 digits  = 1,
+			 caption = "Before merging (part 2)")
+```
+
+## Variable distributions — after merging
+
+```{r after_merge_summary}
+table_after <- summaryClusters(EC_clustered)
+
+knitr::kable(table_after[, 1:split_at],
+			 digits  = 1,
+			 caption = "After merging (part 1)")
+knitr::kable(table_after[, c(1, (split_at + 1):ncol(table_after))],
+			 digits  = 1,
+			 caption = "After merging (part 2)")
+```
+
+## Species catch proportions — before merging
+
+```{r species_before}
+EC_before %>%
+	group_by(cluster) %>%
+	summarise(cluster_size = n(),
+			  yft_n        = sum(yft_n),
+			  bet_n        = sum(bet_n),
+			  alb_n        = sum(alb_n),
+			  total_n      = sum(total_n),
+			  .groups      = "drop") %>%
+	mutate(prop       = cluster_size / sum(cluster_size),
+		   prop_yft   = yft_n   / sum(yft_n),
+		   prop_bet   = bet_n   / sum(bet_n),
+		   prop_alb   = alb_n   / sum(alb_n),
+		   prop_total = total_n / sum(total_n)) %>%
+	mutate(across(starts_with("prop"), ~round(.x, 2))) %>%
+	select(cluster, cluster_size, prop,
+		   yft_n, prop_yft, bet_n, prop_bet, alb_n, prop_alb,
+		   total_n, prop_total) %>%
+	knitr::kable(caption = "Species proportions before merging")
+```
+
+## Species catch proportions — after merging
+
+```{r species_after}
+EC_clustered %>%
+	group_by(cluster) %>%
+	summarise(cluster_size = n(),
+			  yft_n        = sum(yft_n),
+			  bet_n        = sum(bet_n),
+			  alb_n        = sum(alb_n),
+			  total_n      = sum(total_n),
+			  .groups      = "drop") %>%
+	mutate(prop       = cluster_size / sum(cluster_size),
+		   prop_yft   = yft_n   / sum(yft_n),
+		   prop_bet   = bet_n   / sum(bet_n),
+		   prop_alb   = alb_n   / sum(alb_n),
+		   prop_total = total_n / sum(total_n)) %>%
+	mutate(across(starts_with("prop"), ~round(.x, 2))) %>%
+	select(cluster, cluster_size, prop,
+		   yft_n, prop_yft, bet_n, prop_bet, alb_n, prop_alb,
+		   total_n, prop_total) %>%
+	knitr::kable(caption = "Species proportions after merging")
+```

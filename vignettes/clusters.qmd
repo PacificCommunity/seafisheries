@@ -139,8 +139,14 @@ cluster_counts <- data.frame(
 	replicate = 1:kmeans_set
 )
 
-freq_table    <- table(cluster_counts$cluster_n)
-main_clust_n  <- as.numeric(names(freq_table)[which.max(freq_table)])
+freq_table   <- table(cluster_counts$cluster_n)
+main_clust_n <- as.numeric(names(freq_table)[which.max(freq_table)])
+
+# Store as data frame for use in diagnostic report
+freq_df <- data.frame(
+	n_clusters = as.numeric(names(freq_table)),
+	freq       = as.numeric(freq_table)
+)
 
 cat("\nCluster number distribution across replicates:\n")
 print(freq_table)
@@ -158,7 +164,7 @@ if (length(samples_to_rerun) > 0) {
 		"replicates with K =", main_clust_n, "\n")
 
 	for (i in samples_to_rerun) {
-		pca_sub        <- pca_full_90[sample_indices[[i]], 1:pca_res$no_var]
+		pca_sub         <- pca_full_90[sample_indices[[i]], 1:pca_res$no_var]
 		kmeans_res[[i]] <- kmeans(pca_sub,
 								  centers  = main_clust_n,
 								  iter.max = iter_max,
@@ -167,7 +173,7 @@ if (length(samples_to_rerun) > 0) {
 }
 ```
 
-# Apply clustering to full dataset
+# Apply clustering
 
 ```{r}
 cat("\nRunning kmeans on full dataset with K =", main_clust_n, "\n")
@@ -178,6 +184,10 @@ kmeans_full <- kmeans(pca_full_90,
 
 EC_clean$cluster <- assignClusters(as.data.frame(pca_full),
 								   as.data.frame(kmeans_full$centers))
+
+# cluster_init is preserved through both the mutate(cluster = ...) in the
+# merge branch and orderClusters(), which only modifies the cluster column.
+EC_clean$cluster_init <- EC_clean$cluster
 
 cat("Assigned clusters to", nrow(EC_clean), "observations\n")
 ```
@@ -236,9 +246,30 @@ knitr::kable(
 )
 ```
 
-# Save clustered data
+# Save outputs
 
 ```{r}
+# EC_data_clustered.RDS: the clustered data frame.
+#   - cluster:      final cluster labels (post-merge, ordered by YFT fraction)
+#   - cluster_init: pre-merge labels (raw kmeans output, unordered)
 saveRDS(EC_clustered, here("outputs/EC_data_clustered.RDS"))
-cat("\nClustering complete. Data saved to outputs/EC_data_clustered.RDS\n")
+
+# cluster_diagnostics.RDS: everything needed by the diagnostic report vignette.
+# Kept as a single list to avoid cluttering outputs/.
+cluster_diagnostics <- list(
+	pca_res                = pca_res,
+	pca_select             = pca_select,
+	pca_variance_threshold = pca_variance_threshold,
+	scenario               = scenario,
+	gap_stat               = gap_stat,
+	kmeans_res             = kmeans_res,
+	sample_indices         = sample_indices,
+	freq_df                = freq_df,
+	stat_list              = stat_list
+)
+saveRDS(cluster_diagnostics, here("outputs/cluster_diagnostics.RDS"))
+
+cat("\nClustering complete.\n")
+cat("  outputs/EC_data_clustered.RDS  — clustered data (cluster + cluster_init columns)\n")
+cat("  outputs/cluster_diagnostics.RDS — PCA, gap stats, kmeans results\n")
 ```
