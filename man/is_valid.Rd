@@ -15,7 +15,7 @@ A logical vector of the same length as \code{x}.
 \description{
 Returns TRUE for values that are usable in analysis: not NA, NaN, Inf, or
 NULL. For non-numeric input, only checks for NA. Designed for use with
-\code{\link[dplyr:across]{dplyr::if_all()}} to filter rows where all required columns are valid.
+\code{\link[dplyr:if_all]{dplyr::if_all()}} to filter rows where all required columns are valid.
 }
 \examples{
 is_valid(c(1.5, NA, NaN, Inf, -Inf))   # TRUE FALSE FALSE FALSE FALSE
@@ -26,7 +26,7 @@ is_valid(c("a", NA, "b"))               # TRUE FALSE TRUE
 
 }
 \seealso{
-Other data quality utilities: 
-\code{\link{report_removal}()}
+Other data quality utilities:
+\code{\link[=report_removal]{report_removal()}}
 }
 \concept{data quality utilities}

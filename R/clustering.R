@@ -141,8 +141,7 @@ pcaScale <- function(select_dat, method = "zscore") {
 #'
 #' @family clustering utilities
 #' @importFrom factoextra fviz_eig fviz_pca_var
-#' @importFrom ggplot2 ggplot aes geom_point geom_hline geom_vline geom_text
-#'   geom_segment arrow unit labs theme_minimal
+#' @importFrom ggplot2 ggplot aes geom_point geom_hline geom_vline geom_text geom_segment arrow unit labs theme_minimal
 #' @export
 myPCA <- function(data_df, variance_threshold = 0.7, print_it = TRUE,
 				  return_print = FALSE) {

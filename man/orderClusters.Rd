@@ -28,12 +28,12 @@ EC_clustered <- EC_clean \%>\%
 
 }
 \seealso{
-Other clustering utilities: 
-\code{\link{assignClusters}()},
-\code{\link{customKmeans}()},
-\code{\link{myPCA}()},
-\code{\link{pcaScale}()},
-\code{\link{selectScenario}()},
-\code{\link{summaryClusters}()}
+Other clustering utilities:
+\code{\link[=assignClusters]{assignClusters()}},
+\code{\link[=customKmeans]{customKmeans()}},
+\code{\link[=myPCA]{myPCA()}},
+\code{\link[=pcaScale]{pcaScale()}},
+\code{\link[=selectScenario]{selectScenario()}},
+\code{\link[=summaryClusters]{summaryClusters()}}
 }
 \concept{clustering utilities}

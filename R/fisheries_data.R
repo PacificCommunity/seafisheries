@@ -1,5 +1,6 @@
 #' @importFrom dplyr left_join mutate select filter group_by summarise bind_rows rename
 #' @importFrom rlang .data := !!
+NULL
 
 #' Convert Cardinal Coordinates to Decimal Degrees (0-360 longitude range)
 #'
@@ -490,4 +491,364 @@ report_removal <- function(n_removed, n_total, reason) {
 
 roundTo.5 <- function(x){
 	floor(x) + 0.5
+}
+
+
+#' Check that required columns exist in a dataframe
+#'
+#' Internal helper. Stops with a message naming the missing column(s) and the
+#' calling function, instead of letting downstream code fail with a generic
+#' subsetting error.
+#'
+#' @param df A dataframe.
+#' @param cols Character vector of column names expected in `df`.
+#' @param fn_name Character; name of the calling function, used in the error
+#'   message.
+#'
+#' @return Invisibly returns NULL if all columns are present; stops otherwise.
+#' @keywords internal
+.check_cols_exist <- function(df, cols, fn_name) {
+	missing_cols <- setdiff(cols, names(df))
+	if (length(missing_cols) > 0) {
+		stop(fn_name, ": column(s) not found in data: ",
+			 paste(missing_cols, collapse = ", "), call. = FALSE)
+	}
+	invisible(NULL)
+}
+
+#' Remove rows with invalid values in required columns
+#'
+#' Wraps [is_valid()] over a set of required columns and drops any row where
+#' at least one of them is NA, NaN, Inf, or NULL. Logs the removal via
+#' [report_removal()].
+#'
+#' @param df A dataframe.
+#' @param required_cols Character vector of column names that must all be
+#'   valid for a row to be kept.
+#'
+#' @return The filtered dataframe.
+#'
+#' @family cleaning steps
+#' @export
+remove_invalid <- function(df, required_cols) {
+	.check_cols_exist(df, required_cols, "remove_invalid")
+	n0 <- nrow(df)
+	df_out <- df %>% filter(if_all(all_of(required_cols), is_valid))
+	report_removal(n0 - nrow(df_out), n0, "invalid values (NA/NaN/Inf) in required columns")
+	df_out
+}
+
+#' Remove dummy fisheries (positive catch, zero effort)
+#'
+#' A row is a dummy fishery if the sum across `catch_cols` is > 0 while
+#' `effort_col` is 0. Pass a single column name to replicate checking one
+#' species only; pass several to sum across species.
+#'
+#' @param df A dataframe.
+#' @param catch_cols Character vector of one or more catch column names.
+#' @param effort_col Character; name of the effort column.
+#' @param return_dummy Logical; if TRUE, returns a list with both the
+#'   cleaned data and the removed dummy-fishery rows, instead of just the
+#'   cleaned data. Default FALSE.
+#'
+#' @return If `return_dummy = FALSE` (default): the filtered dataframe.
+#'   If `return_dummy = TRUE`: a list with elements `data` (filtered
+#'   dataframe) and `dummy` (the removed rows).
+#'
+#' @family cleaning steps
+#' @export
+remove_dummy_fisheries <- function(df, catch_cols, effort_col, return_dummy = FALSE) {
+	.check_cols_exist(df, c(catch_cols, effort_col), "remove_dummy_fisheries")
+	n0 <- nrow(df)
+	catch_total <- rowSums(as.data.frame(df[, catch_cols, drop = FALSE]), na.rm = TRUE)
+	is_dummy <- catch_total > 0 & df[[effort_col]] == 0
+	df_out <- df[!is_dummy, ]
+	report_removal(sum(is_dummy), n0, "dummy fisheries (catch > 0, effort = 0)")
+
+	if (return_dummy) {
+		return(list(data = df_out, dummy = df[is_dummy, ]))
+	}
+	df_out
+}
+
+#' Remove zero fisheries (zero catch and zero effort)
+#'
+#' @inheritParams remove_dummy_fisheries
+#'
+#' @return The filtered dataframe.
+#'
+#' @family cleaning steps
+#' @export
+remove_zero_fisheries <- function(df, catch_cols, effort_col) {
+	.check_cols_exist(df, c(catch_cols, effort_col), "remove_zero_fisheries")
+	n0 <- nrow(df)
+	catch_total <- rowSums(as.data.frame(df[, catch_cols, drop = FALSE]), na.rm = TRUE)
+	df_out <- df[!(catch_total == 0 & df[[effort_col]] == 0), ]
+	report_removal(n0 - nrow(df_out), n0, "zero fisheries (catch = 0, effort = 0)")
+	df_out
+}
+
+#' Remove statistical outliers in a numeric column
+#'
+#' Drops rows more than `n_sd` standard deviations from the column mean.
+#'
+#' @param df A dataframe.
+#' @param col Character; name of the numeric column to check.
+#' @param n_sd Numeric; number of standard deviations defining the cutoff.
+#'   Default 3.
+#'
+#' @return The filtered dataframe.
+#'
+#' @family cleaning steps
+#' @export
+remove_outliers_sd <- function(df, col, n_sd = 3) {
+	.check_cols_exist(df, col, "remove_outliers_sd")
+	n0 <- nrow(df)
+	m <- mean(df[[col]], na.rm = TRUE)
+	s <- sd(df[[col]], na.rm = TRUE)
+	df_out <- df %>% filter(abs(.data[[col]] - m) <= n_sd * s)
+	report_removal(n0 - nrow(df_out), n0, paste0(col, " outliers (>", n_sd, " SD)"))
+	df_out
+}
+
+#' Remove exact duplicate rows
+#'
+#' @param df A dataframe.
+#'
+#' @return The filtered dataframe.
+#'
+#' @family cleaning steps
+#' @export
+remove_duplicates <- function(df) {
+	n0 <- nrow(df)
+	df_out <- df %>% distinct()
+	report_removal(n0 - nrow(df_out), n0, "exact duplicates")
+	df_out
+}
+
+#' Apply the Pacific Ocean spatial mask
+#'
+#' Filters to `lat_range`/`lon_range` and semi-joins against `pmask_lookup`
+#' (expected to have columns `latCent`, `lonCent`) using whatever grid-center
+#' column names are supplied.
+#'
+#' @param df A dataframe, already containing rounded grid-center coordinates.
+#' @param lat_col,lon_col Character; names of the grid-center lat/lon columns
+#'   in `df` (e.g. from [roundTo.5()]).
+#' @param pmask_lookup A lookup dataframe with columns `latCent`, `lonCent`.
+#'
+#' @return The filtered dataframe.
+#'
+#' @family cleaning steps
+#' @export
+apply_pacific_mask <- function(df, lat_col, lon_col, pmask_lookup) {
+	.check_cols_exist(df, c(lat_col, lon_col), "apply_pacific_mask")
+	n0 <- nrow(df)
+	join_by <- stats::setNames(c("latCent", "lonCent"), c(lat_col, lon_col))
+	df_out <- df %>%
+		filter(.data[[lat_col]] >= lat_range[1] & .data[[lat_col]] <= lat_range[2],
+			   .data[[lon_col]] >= lon_range[1] & .data[[lon_col]] <= lon_range[2]) %>%
+		semi_join(pmask_lookup, by = join_by)
+	report_removal(n0 - nrow(df_out), n0, "outside Pacific mask")
+	df_out
+}
+
+#' Flag and clean Hooks Between Floats (HBF) values
+#'
+#' Longline-specific. Flags HBF values above `threshold` as outliers without
+#' removing rows (adds a logical `hbf_outlier` column), and converts
+#' non-positive HBF values to NA.
+#'
+#' @param df A dataframe.
+#' @param hbf_col Character; name of the HBF column. Default "hbf".
+#' @param threshold Numeric; HBF values above this are flagged as outliers.
+#'   Default 50.
+#'
+#' @return The dataframe with `hbf_col` <= 0 converted to NA and a new
+#'   logical column `hbf_outlier`.
+#'
+#' @family cleaning steps
+#' @export
+treat_hbf <- function(df, hbf_col = "hbf", threshold = 50) {
+	.check_cols_exist(df, hbf_col, "treat_hbf")
+
+	n_gt <- sum(df[[hbf_col]] > threshold, na.rm = TRUE)
+	n_le0 <- sum(df[[hbf_col]] <= 0, na.rm = TRUE)
+
+	df <- df %>% mutate(hbf_outlier = .data[[hbf_col]] > threshold)
+
+	if (n_gt > 0) {
+		cat(n_gt, " entries flagged with", hbf_col, ">", threshold, "(",
+			round(n_gt / nrow(df) * 100, 2), "% of data)\n")
+	}
+
+	df[[hbf_col]] <- ifelse(df[[hbf_col]] <= 0, NA, df[[hbf_col]])
+
+	if (n_le0 > 0) {
+		cat(n_le0, " entries with", hbf_col, "<= 0 converted to NA (",
+			round(n_le0 / nrow(df) * 100, 2), "% of data)\n")
+	}
+
+	df
+}
+
+#' Recode purse seine school-association codes
+#'
+#' Purse-seine-specific. Valid school types are `valid_range` (default 1-7).
+#' Values outside that range (e.g. -9, -1, 0, 8 seen in practice) are
+#' recoded to 10 for later review. Missing values (NA/NaN, or non-numeric
+#' strings like "NULL" that coerce to NA) are left as NA. Logs how many rows
+#' were recoded to 10 and how many were missing.
+#'
+#' @param df A dataframe.
+#' @param school_col Character; name of the school column. Default "school".
+#' @param valid_range Integer vector of values considered valid. Default 1:7.
+#'
+#' @return The dataframe with `school_col` recoded to numeric: valid values
+#'   unchanged, out-of-range values set to 10, missing values left as NA.
+#'
+#' @family cleaning steps
+#' @export
+treat_school <- function(df, school_col = "school", valid_range = 1:7) {
+	.check_cols_exist(df, school_col, "treat_school")
+
+	school_num <- suppressWarnings(as.numeric(df[[school_col]]))
+	n_total <- nrow(df)
+
+	is_missing <- is.na(school_num)
+	is_out_of_range <- !is_missing & !(school_num %in% valid_range)
+
+	school_num[is_out_of_range] <- 10
+	df[[school_col]] <- school_num
+
+	n_out_of_range <- sum(is_out_of_range)
+	n_missing <- sum(is_missing)
+
+	if (n_out_of_range > 0) {
+		cat(n_out_of_range, " entries with", school_col, "outside",
+			min(valid_range), "-", max(valid_range), "recoded to 10 (",
+			round(n_out_of_range / n_total * 100, 2), "% of data)\n")
+	}
+
+	if (n_missing > 0) {
+		cat(n_missing, " entries with missing", school_col, "(",
+			round(n_missing / n_total * 100, 2), "% of data)\n")
+	}
+
+	df
+}
+
+#' Trim trailing whitespace from a vessel name column
+#'
+#' Removes no rows -- exists mainly so it can be called conditionally inside
+#' [process_catch_data()] when a vessel name column is present.
+#'
+#' @param df A dataframe.
+#' @param vesselname_col Character; name of the vessel name column.
+#'
+#' @return The dataframe with `vesselname_col` right-trimmed.
+#'
+#' @family cleaning steps
+#' @export
+trim_vesselname <- function(df, vesselname_col) {
+	.check_cols_exist(df, vesselname_col, "trim_vesselname")
+	df %>% mutate(!!vesselname_col := str_trim(.data[[vesselname_col]], side = "right"))
+}
+
+#' Process raw catch/effort fisheries data into cleaned form
+#'
+#' Runs [remove_invalid()], an optional gear-specific step,
+#' [remove_dummy_fisheries()], [remove_zero_fisheries()],
+#' [remove_outliers_sd()], an optional vessel-name trim,
+#' [remove_duplicates()], and [apply_pacific_mask()] in sequence. Each step
+#' prints its own removal report as it runs.
+#'
+#' Assumes `df` has already been renamed to standard column names, had
+#' coordinates converted via [convert_coordinates_df()], and had grid centers
+#' computed via [roundTo.5()].
+#'
+#' Gear-specific step: `gear = "L"` (longline) runs [treat_hbf()];
+#' `gear = "S"` (purse seine) runs [treat_school()]. Leave `gear = NULL`
+#' (the default) for gears such as pole-and-line that have neither field --
+#' the step is skipped entirely rather than forcing a choice. This step runs
+#' immediately after [remove_invalid()] and before the catch/effort filters,
+#' since the purse-seine ordering hasn't been validated against a real
+#' pipeline yet -- flag if that placement turns out to be wrong for your data.
+#'
+#' Vessel-name trimming runs only if `vesselname_col` is supplied (not all
+#' gears have this field, e.g. purse seine per your data), and always runs
+#' before [remove_duplicates()] -- trimming after dedup would miss duplicate
+#' rows that differ only by trailing whitespace on the vessel name.
+#'
+#' `catch_cols` is summed across all columns supplied when checking for
+#' dummy/zero fisheries, so pass whichever species/catch columns are present
+#' and relevant for your gear -- e.g. `_n` (count) columns for longline where
+#' available, `_w` (weight) columns for purse seine where `_n` isn't present.
+#'
+#' @param df A dataframe, pre-renamed and coordinate-converted.
+#' @param required_cols Character vector of columns checked for validity.
+#' @param catch_cols Character vector of one or more catch column names,
+#'   summed when checking dummy/zero fisheries.
+#' @param effort_col Character; name of the effort column.
+#' @param lat_col,lon_col Character; names of the grid-center lat/lon columns.
+#' @param pmask_lookup A lookup dataframe with columns `latCent`, `lonCent`.
+#' @param effort_sd_n Numeric; SD cutoff for effort outlier removal. Default 3.
+#' @param gear Character or NULL; "L" for longline, "S" for purse seine, or
+#'   NULL (default) to skip the gear-specific step entirely.
+#' @param hbf_col Character; HBF column name, used when `gear = "L"`.
+#'   Default "hbf".
+#' @param hbf_threshold Numeric; HBF outlier threshold, used when
+#'   `gear = "L"`. Default 50.
+#' @param school_col Character; school column name, used when `gear = "S"`.
+#'   Default "school".
+#' @param vesselname_col Character or NULL; name of the vessel name column,
+#'   trimmed before duplicate removal if supplied. Default NULL (skipped).
+#' @param return_dummy Logical; if TRUE, returns a list with both the
+#'   cleaned data and the removed dummy-fishery rows, instead of just the
+#'   cleaned data. Default FALSE.
+#'
+#' @return If `return_dummy = FALSE` (default): the cleaned dataframe.
+#'   If `return_dummy = TRUE`: a list with elements `data` (cleaned
+#'   dataframe) and `dummy_fisheries` (the removed dummy-fishery rows).
+#'
+#' @family cleaning steps
+#' @export
+process_catch_data <- function(df, required_cols, catch_cols, effort_col,
+							   lat_col, lon_col, pmask_lookup, effort_sd_n = 3,
+							   gear = NULL,
+							   hbf_col = "hbf", hbf_threshold = 50,
+							   school_col = "school",
+							   vesselname_col = NULL,
+							   return_dummy = FALSE) {
+
+	if (!is.null(gear)) {
+		gear <- match.arg(gear, c("L", "S"))
+	}
+
+	df <- remove_invalid(df, required_cols)
+
+	if (!is.null(gear) && gear == "L") {
+		df <- treat_hbf(df, hbf_col = hbf_col, threshold = hbf_threshold)
+	} else if (!is.null(gear) && gear == "S") {
+		df <- treat_school(df, school_col = school_col)
+	}
+
+	dummy_res <- remove_dummy_fisheries(df, catch_cols, effort_col, return_dummy = TRUE)
+	df <- dummy_res$data
+	dummy_fisheries <- dummy_res$dummy
+
+	df <- remove_zero_fisheries(df, catch_cols, effort_col)
+	# df <- remove_outliers_sd(df, effort_col, effort_sd_n)
+
+	if (!is.null(vesselname_col)) {
+		df <- trim_vesselname(df, vesselname_col)
+	}
+
+	df <- remove_duplicates(df)
+	df <- apply_pacific_mask(df, lat_col, lon_col, pmask_lookup)
+
+	if (return_dummy) {
+		return(list(data = df, dummy_fisheries = dummy_fisheries))
+	}
+	df
 }

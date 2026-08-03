@@ -2,6 +2,7 @@
 #' @importFrom ggplot2 geom_polygon aes scale_x_continuous scale_y_continuous
 #' @importFrom ggplot2 map_data
 #' @importFrom dplyr mutate
+NULL
 
 #' Custom ggplot2 theme for fisheries maps and plots
 #'

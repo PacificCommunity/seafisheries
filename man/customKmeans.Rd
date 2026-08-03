@@ -60,12 +60,12 @@ res$plot            # diagnostic plot
 
 }
 \seealso{
-Other clustering utilities: 
-\code{\link{assignClusters}()},
-\code{\link{myPCA}()},
-\code{\link{orderClusters}()},
-\code{\link{pcaScale}()},
-\code{\link{selectScenario}()},
-\code{\link{summaryClusters}()}
+Other clustering utilities:
+\code{\link[=assignClusters]{assignClusters()}},
+\code{\link[=myPCA]{myPCA()}},
+\code{\link[=orderClusters]{orderClusters()}},
+\code{\link[=pcaScale]{pcaScale()}},
+\code{\link[=selectScenario]{selectScenario()}},
+\code{\link[=summaryClusters]{summaryClusters()}}
 }
 \concept{clustering utilities}

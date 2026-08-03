@@ -30,12 +30,12 @@ EC_clean$cluster <- assignClusters(as.data.frame(pca_full),
 
 }
 \seealso{
-Other clustering utilities: 
-\code{\link{customKmeans}()},
-\code{\link{myPCA}()},
-\code{\link{orderClusters}()},
-\code{\link{pcaScale}()},
-\code{\link{selectScenario}()},
-\code{\link{summaryClusters}()}
+Other clustering utilities:
+\code{\link[=customKmeans]{customKmeans()}},
+\code{\link[=myPCA]{myPCA()}},
+\code{\link[=orderClusters]{orderClusters()}},
+\code{\link[=pcaScale]{pcaScale()}},
+\code{\link[=selectScenario]{selectScenario()}},
+\code{\link[=summaryClusters]{summaryClusters()}}
 }
 \concept{clustering utilities}

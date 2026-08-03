@@ -31,7 +31,7 @@ report_removal(0, 1000, "duplicates")
 
 }
 \seealso{
-Other data quality utilities: 
-\code{\link{is_valid}()}
+Other data quality utilities:
+\code{\link[=is_valid]{is_valid()}}
 }
 \concept{data quality utilities}

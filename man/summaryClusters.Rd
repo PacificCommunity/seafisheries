@@ -37,12 +37,12 @@ cluster_summary <- summaryClusters(EC_clustered)
 
 }
 \seealso{
-Other clustering utilities: 
-\code{\link{assignClusters}()},
-\code{\link{customKmeans}()},
-\code{\link{myPCA}()},
-\code{\link{orderClusters}()},
-\code{\link{pcaScale}()},
-\code{\link{selectScenario}()}
+Other clustering utilities:
+\code{\link[=assignClusters]{assignClusters()}},
+\code{\link[=customKmeans]{customKmeans()}},
+\code{\link[=myPCA]{myPCA()}},
+\code{\link[=orderClusters]{orderClusters()}},
+\code{\link[=pcaScale]{pcaScale()}},
+\code{\link[=selectScenario]{selectScenario()}}
 }
 \concept{clustering utilities}

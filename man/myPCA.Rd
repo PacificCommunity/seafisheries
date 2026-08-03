@@ -40,12 +40,12 @@ pca_scores <- pca_res$x[, 1:pca_res$no_var]
 
 }
 \seealso{
-Other clustering utilities: 
-\code{\link{assignClusters}()},
-\code{\link{customKmeans}()},
-\code{\link{orderClusters}()},
-\code{\link{pcaScale}()},
-\code{\link{selectScenario}()},
-\code{\link{summaryClusters}()}
+Other clustering utilities:
+\code{\link[=assignClusters]{assignClusters()}},
+\code{\link[=customKmeans]{customKmeans()}},
+\code{\link[=orderClusters]{orderClusters()}},
+\code{\link[=pcaScale]{pcaScale()}},
+\code{\link[=selectScenario]{selectScenario()}},
+\code{\link[=summaryClusters]{summaryClusters()}}
 }
 \concept{clustering utilities}

@@ -37,3 +37,9 @@ folder and run them interactively block by block.
 remotes::install_github("PacificCommunity/seafisheries",
                           build_vignettes = TRUE)
 ```
+
+TODO
+
+need to load mutate function and ggplot
+
+are coordinates exact or south west corner?
