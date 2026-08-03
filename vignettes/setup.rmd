@@ -6,8 +6,8 @@ editor_options:
 output: rmarkdown::html_vignette
 vignette: >
   %\VignetteIndexEntry{01 Setup}
-  %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
 ---
 
 ```{r, echo = F, warning = F, message = F, warning = FALSE}

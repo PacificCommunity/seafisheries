@@ -1,13 +1,13 @@
 ---
-title: Clustering data
+title: 03 Clustering data
 author: Romain Forestier
 editor_options: 
   chunk_output_type: console
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Clustering data}
-  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteIndexEntry{03 Clustering data}
   %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
 ---
 
 ```{r, warning=FALSE, message=FALSE, echo=FALSE}

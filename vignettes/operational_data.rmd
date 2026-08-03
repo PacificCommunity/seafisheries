@@ -6,8 +6,8 @@ editor_options:
 output: rmarkdown::html_vignette
 vignette: >
   %\VignetteIndexEntry{02 Processing Operational Data}
-  %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
 ---
 ```{r, warning=FALSE, message=F, echo=FALSE}
 library(seafisheries)
@@ -135,150 +135,131 @@ EC_raw <- EC_raw |>
 	)
 ```
 
-## Remove entries with NA, NaN, Inf, or NULL in required fields
+## Remove invalid entries
+
+`remove_invalid()` drops rows with NA, NaN, Inf, or NULL in any of the
+columns you consider essential, here, coordinates, date, effort, and all
+species catch counts.
 
 ```{r}
 required_cols <- c("ymd", "latitude", "longitude", "E", "yft_n", "skj_n", 
 				   "bet_n", "alb_n", "oth_n")
 
-EC_raw <- EC_raw |>
-	filter(if_all(all_of(required_cols), is_valid))
-
-stat_list$nrow_noNA <- nrow(EC_raw)
-stat_list$outliers_NA <- stat_list$nrow_init - stat_list$nrow_noNA
-
-report_removal(stat_list$outliers_NA, stat_list$nrow_init, "corrupted data")
-
-cat("There are", stat_list$nrow_noNA, "entries available for", 
-	sum(EC_raw$yft_n), "yellowfins caught\n")
-
-timeframe <- range(EC_raw$ymd)
-cat("Data ranges from", as.character(timeframe[1]), "to", 
-	as.character(timeframe[2]), "\n\n")
-
-
-
+EC_raw <- remove_invalid(EC_raw, required_cols)
 ```
 
-# Handle Hooks Between Floats (HBF) quality issues
+## Handle Hooks Between Floats (HBF); longline only
 
+`treat_hbf()` is gear-specific. It flags HBF values above a threshold as
+outliers (without removing rows) and converts non-positive HBF values to NA.
+Skip this step entirely for gears without an HBF field.
 
 ```{r}
-# Track initial HBF statistics
-hbf_threshold <- 50
-
-stat_list$hbf_gt_threshold <- sum(EC_raw$hbf > hbf_threshold, na.rm = TRUE)
-stat_list$hbf_le0 <- sum(EC_raw$hbf <= 0, na.rm = TRUE)
-
-# Flag outliers > 50
-EC_raw <- EC_raw |>
-	mutate(hbf_outlier = hbf > hbf_threshold)
-
-if(stat_list$hbf_gt_threshold > 0) {
-	cat(stat_list$hbf_gt_threshold, " entries flagged with HBF > 50 (",
-		round(stat_list$hbf_gt_threshold / nrow(EC_raw) * 100, 2), "% of data)\n")
-}
-
-# Convert invalid HBF (≤ 0) to NA
-EC_raw <- EC_raw |>
-	mutate(hbf = ifelse(hbf <= 0, NA, hbf))
-
-if(stat_list$hbf_le0 > 0) {
-	cat(stat_list$hbf_le0, " entries with HBF ≤ 0 converted to NA (",
-		round(stat_list$hbf_le0 / nrow(EC_raw) * 100, 2), "% of data)\n")
-}
-
-# Summary
-stat_list$hbf_valid <- sum(!is.na(EC_raw$hbf) & !EC_raw$hbf_outlier, na.rm = TRUE)
-cat("HBF summary: ", stat_list$hbf_valid, " valid,",
-	stat_list$hbf_le0, " NA,", 
-	stat_list$hbf_gt_threshold, " outliers (>50)\n\n")
+EC_raw <- treat_hbf(EC_raw, hbf_col = "hbf", threshold = 50)
 ```
 
-## Remove dummy fisheries (positive catch with zero effort)
+## Recode school-association codes; purse seine only
+
+`treat_school()` is the purse-seine equivalent of `treat_hbf()`. Valid school
+types are 1-7; anything else present in the data (e.g. -9, -1, 0, 8) gets
+recoded to 10 for later review, and missing values are left as NA. Shown for reference only.
+
+```{r, eval = FALSE}
+EC_raw <- treat_school(EC_raw, school_col = "school")
+```
+
+## Remove dummy fisheries
+
+`remove_dummy_fisheries()` drops rows with positive catch (summed across
+`catch_cols`) but zero effort. Set `return_dummy = TRUE` to get the removed
+rows back alongside the cleaned data, e.g. for manual inspection.
 
 ```{r}
-dummy_fisheries <- EC_raw |> filter(yft_n > 0 & E == 0)
-stat_list$dummy_fisheries <- nrow(dummy_fisheries)
-
-# if(stat_list$dummy_fisheries > 0) {
-#   saveRDS(dummy_fisheries, "processed/EC_dummy_fisheries.RDS")
-# }
-
-report_removal(stat_list$dummy_fisheries, stat_list$nrow_init, 
-			   "dummy fisheries (catch > 0, effort = 0)")
-
-EC_raw <- EC_raw |> filter(!(yft_n > 0 & E == 0))
+EC_raw <- remove_dummy_fisheries(EC_raw, 
+								  catch_cols = c("yft_n", "skj_n", "bet_n", "alb_n", "oth_n"), 
+								  effort_col = "E")
 ```
 
-## Remove zero fisheries (zero catch AND zero effort)
+## Remove zero fisheries
+
+`remove_zero_fisheries()` is the mirror case: rows with zero catch and zero
+effort carry no information and are dropped.
 
 ```{r}
-zero_fisheries <- EC_raw |> filter(yft_n == 0 & E == 0)
-stat_list$zero_fisheries <- nrow(zero_fisheries)
-
-# if(stat_list$zero_fisheries > 0) {
-#   saveRDS(zero_fisheries, "processed/EC_zero_fisheries.RDS")
-# }
-
-report_removal(stat_list$zero_fisheries, stat_list$nrow_init, 
-			   "zero fisheries (catch = 0, effort = 0)")
-
-EC_raw <- EC_raw |> filter(!(yft_n == 0 & E == 0))
+EC_raw <- remove_zero_fisheries(EC_raw, 
+								 catch_cols = c("yft_n", "skj_n", "bet_n", "alb_n", "oth_n"), 
+								 effort_col = "E")
 ```
 
-## Remove effort outliers (beyond 3 standard deviations)
+## Remove effort outliers
+
+`remove_outliers_sd()` drops rows more than `n_sd` standard deviations from
+the mean of a numeric column -- here, effort.
 
 ```{r}
-nrow_before <- nrow(EC_raw)
-
-EC_raw <- EC_raw |>
-	filter(abs(E - mean(E, na.rm = TRUE)) <= 3 * sd(E, na.rm = TRUE))
-
-stat_list$outliers_effort <- nrow_before - nrow(EC_raw)
-report_removal(stat_list$outliers_effort, stat_list$nrow_init, 
-			   "effort outliers")
+EC_raw <- remove_outliers_sd(EC_raw, col = "E", n_sd = 3)
 ```
 
-## Clean vessel names (remove trailing spaces)
+## Clean vessel names
+
+`trim_vesselname()` right-trims whitespace from a vessel name column. It
+removes no rows, but has to run before duplicate removal, otherwise two
+rows differing only by trailing whitespace on `vesselname` won't collapse
+into a duplicate.
 
 ```{r}
-EC_raw <- EC_raw |>
-	mutate(vesselname = str_trim(vesselname, side = "right"))
+EC_raw <- trim_vesselname(EC_raw, vesselname_col = "vesselname")
 ```
 
-## Remove exact duplicate entries
+## Remove exact duplicates
+
+`remove_duplicates()` drops exact duplicate rows across all columns.
 
 ```{r}
-nrow_before <- nrow(EC_raw)
-EC_raw <- EC_raw |> distinct()
-stat_list$duplicates <- nrow_before - nrow(EC_raw)
-
-report_removal(stat_list$duplicates, stat_list$nrow_init, "duplicates")
+EC_raw <- remove_duplicates(EC_raw)
 ```
 
-# Apply Pacific Ocean mask
+## Apply the Pacific Ocean mask
+
+`apply_pacific_mask()` filters to the Pacific bounding box and semi-joins
+against the mask lookup table, dropping grid cells outside the region of
+interest.
 
 ```{r}
-EC_masked <- EC_raw |>
-	filter(latCent >= lat_range[1] & latCent <= lat_range[2], 
-		   lonCent >= lon_range[1] & lonCent <= lon_range[2]) |>
-	semi_join(pmask_lookup, by = c("latCent", "lonCent"))
-
-mask_outliers <- anti_join(EC_raw, EC_masked, 
-						   by = c("latCent", "lonCent", "ymd", "flag"))
-stat_list$outliers_mask <- nrow(mask_outliers)
-
-# if(stat_list$outliers_mask > 0) {
-#   saveRDS(mask_outliers, "processed/EC_outliers_mask.RDS")
-# }
-
-report_removal(stat_list$outliers_mask, stat_list$nrow_init, 
-			   "outside Pacific mask")
-
-EC_raw <- EC_masked
-stat_list$nrow_clean <- nrow(EC_raw)
+EC_raw <- apply_pacific_mask(EC_raw, lat_col = "latCent", lon_col = "lonCent", 
+							  pmask_lookup = pmask_lookup)
 ```
+
+## All of the above, in one call
+
+`process_catch_data()` runs every step above in sequence (skipping
+`treat_hbf`/`treat_school` unless `gear` is set, and skipping vessel-name
+trimming unless `vesselname_col` is supplied). Equivalent to everything from
+"Remove invalid entries" through "Apply the Pacific Ocean mask" above.
+`return_dummy = TRUE` returns a list with `data` (cleaned) and
+`dummy_fisheries` (the removed rows) instead of just the cleaned data.
+
+```{r}
+result <- process_catch_data(
+	df              = EC_raw,
+	required_cols   = required_cols,
+	catch_cols      = c("yft_n", "skj_n", "bet_n", "alb_n", "oth_n"),
+	effort_col      = "E",
+	lat_col         = "latCent",
+	lon_col         = "lonCent",
+	pmask_lookup    = pmask_lookup,
+	effort_sd_n     = 3,
+	gear            = "L",
+	hbf_col         = "hbf",
+	hbf_threshold   = 50,
+	vesselname_col  = "vesselname",
+	return_dummy    = TRUE
+)
+
+EC_raw <- result$data
+dummy_fisheries <- result$dummy_fisheries
+```
+
 
 ```{r}
 saveRDS(EC_raw, here("outputs/EC_data.RDS"))

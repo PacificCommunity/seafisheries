@@ -6,8 +6,8 @@ editor_options:
 output: rmarkdown::html_vignette
 vignette: >
   %\VignetteIndexEntry{To create mock up data to use in the other documents}
-  %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
 ---
 
 ```{r, echo = F, warning = F, message = F, warning = FALSE}
