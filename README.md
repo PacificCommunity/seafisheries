@@ -34,7 +34,6 @@ folder and run them interactively block by block.
 
 ### Installation
 ```r
-# install.packages("devtools")
-devtools::install_github("your-org/seapodym-clusterFisheries",
+remotes::install_github("PacificCommunity/seafisheries",
                           build_vignettes = TRUE)
 ```
