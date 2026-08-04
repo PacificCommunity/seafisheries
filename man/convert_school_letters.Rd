@@ -8,7 +8,7 @@ convert_school_letters(
   df,
   school_col = "school_LF",
   output_col = "school",
-  lookup = c(F = 4, L = 3, U = 1, `0` = 10, M = 6, A = 7)
+  lookup = c(F = 4, L = 3, U = 1, M = 6, A = 7, O = 8)
 )
 }
 \arguments{
@@ -22,24 +22,26 @@ Default "school". The original \code{school_col} is left untouched for
 traceability.}
 
 \item{lookup}{Named character vector mapping letter codes to numeric
-codes. Default: F->4, L->3, U->1, "0"->10, M->6, A->7.}
+codes. Default: F->4, L->3, U->1, M->6, A->7, O->8.}
 }
 \value{
 \code{df} with a new column \code{output_col} holding the numeric codes.
 }
 \description{
 Translates the letter-coded school associations used in raised
-length-frequency data (F, L, U, "0", M, A) to the numeric scheme used for
-catch/effort school codes. LF data doesn't distinguish the finer
-categories the catch-data numeric scheme allows for F (4 or 5) or U (1 or
-2), so this collapses each to a single fixed value (F->4, U->1) by
-convention, not because the mapping is otherwise ambiguous.
+length-frequency data (F, L, U, M, A, O -- per source description: F =
+Drifting or Anchored FAD, L = Log, U = Unassociated, M = Marine mammal
+(EPO), A = Associated, O = Other) to the numeric scheme in
+\code{school_type_lookup}. LF data doesn't distinguish the finer categories
+the numeric scheme allows for F (4 or 5, drifting vs anchored) or U (1
+or 2, unassociated vs feeding on baitfish), so this collapses each to a
+single fixed value (F->4, U->1) by convention.
 }
 \details{
 Values not present in \code{lookup} become NA in \code{output_col}, rather than
 being guessed at. Run \code{treat_school()} on the result afterward -- it
-applies the valid-range/unsure-recode logic and will treat those NAs as
-missing, not as out-of-range.
+applies the valid-code/unknown-recode logic and will treat those NAs as
+missing, not as unknown.
 }
 \seealso{
 Other cleaning steps:

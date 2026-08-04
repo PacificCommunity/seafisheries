@@ -4,25 +4,31 @@
 \alias{treat_school}
 \title{Recode purse seine school-association codes}
 \usage{
-treat_school(df, school_col = "school", valid_range = 1:7)
+treat_school(
+  df,
+  school_col = "school",
+  valid_codes = school_type_lookup$school_type_id
+)
 }
 \arguments{
 \item{df}{A dataframe.}
 
 \item{school_col}{Character; name of the school column. Default "school".}
 
-\item{valid_range}{Integer vector of values considered valid. Default 1:7.}
+\item{valid_codes}{Numeric vector of values considered valid. Default
+\code{school_type_lookup$school_type_id}.}
 }
 \value{
 The dataframe with \code{school_col} recoded to numeric: valid values
-unchanged, out-of-range values set to 10, missing values left as NA.
+unchanged, out-of-set and missing values set to -1.
 }
 \description{
-Purse-seine-specific. Valid school types are \code{valid_range} (default 1-7).
-Values outside that range (e.g. -9, -1, 0, 8 seen in practice) are
-recoded to 10 for later review. Missing values (NA/NaN, or non-numeric
-strings like "NULL" that coerce to NA) are left as NA. Logs how many rows
-were recoded to 10 and how many were missing.
+Purse-seine-specific. Valid school types are \code{valid_codes} (default: the
+full \code{school_type_lookup$school_type_id} set: -1, 0-8
+Values outside that set, AND missing values (NA/NaN, or non-numeric
+strings like "NULL" that coerce to NA), are recoded to -1 ("Unknown",
+per \code{school_type_lookup}). Logs a breakdown of exactly which original codes
+(and how many NAs) got recoded, not just an aggregate count.
 }
 \seealso{
 Other cleaning steps:

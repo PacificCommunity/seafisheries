@@ -694,46 +694,49 @@ treat_hbf <- function(df, hbf_col = "hbf", threshold = 50) {
 
 #' Recode purse seine school-association codes
 #'
-#' Purse-seine-specific. Valid school types are `valid_range` (default 1-7).
-#' Values outside that range (e.g. -9, -1, 0, 8 seen in practice) are
-#' recoded to 10 for later review. Missing values (NA/NaN, or non-numeric
-#' strings like "NULL" that coerce to NA) are left as NA. Logs how many rows
-#' were recoded to 10 and how many were missing.
+#' Purse-seine-specific. Valid school types are `valid_codes` (default: the
+#' full `school_type_lookup$school_type_id` set: -1, 0-8
+#' Values outside that set, AND missing values (NA/NaN, or non-numeric
+#' strings like "NULL" that coerce to NA), are recoded to -1 ("Unknown",
+#' per `school_type_lookup`). Logs a breakdown of exactly which original codes
+#' (and how many NAs) got recoded, not just an aggregate count.
 #'
 #' @param df A dataframe.
 #' @param school_col Character; name of the school column. Default "school".
-#' @param valid_range Integer vector of values considered valid. Default 1:7.
+#' @param valid_codes Numeric vector of values considered valid. Default
+#'   `school_type_lookup$school_type_id`.
 #'
 #' @return The dataframe with `school_col` recoded to numeric: valid values
-#'   unchanged, out-of-range values set to 10, missing values left as NA.
+#'   unchanged, out-of-set and missing values set to -1.
 #'
 #' @family cleaning steps
 #' @export
-treat_school <- function(df, school_col = "school", valid_range = 1:7) {
+treat_school <- function(df, school_col = "school", valid_codes = school_type_lookup$school_type_id) {
 	.check_cols_exist(df, school_col, "treat_school")
 
 	school_num <- suppressWarnings(as.numeric(df[[school_col]]))
 	n_total <- nrow(df)
 
 	is_missing <- is.na(school_num)
-	is_out_of_range <- !is_missing & !(school_num %in% valid_range)
+	is_out_of_range <- !is_missing & !(school_num %in% valid_codes)
 
-	school_num[is_out_of_range] <- 10
-	df[[school_col]] <- school_num
+	if (any(is_out_of_range)) {
+		out_of_range_counts <- table(school_num[is_out_of_range])
+		cat("Out-of-range '", school_col, "' values recoded to -1 (Unknown):\n", sep = "")
+		for (val in names(out_of_range_counts)) {
+			n <- out_of_range_counts[[val]]
+			cat("  ", val, ": ", n, " (", round(n / n_total * 100, 2), "% of data)\n", sep = "")
+		}
+	}
 
-	n_out_of_range <- sum(is_out_of_range)
 	n_missing <- sum(is_missing)
-
-	if (n_out_of_range > 0) {
-		cat(n_out_of_range, " entries with", school_col, "outside",
-			min(valid_range), "-", max(valid_range), "recoded to 10 (",
-			round(n_out_of_range / n_total * 100, 2), "% of data)\n")
-	}
-
 	if (n_missing > 0) {
-		cat(n_missing, " entries with missing", school_col, "(",
-			round(n_missing / n_total * 100, 2), "% of data)\n")
+		cat("  NA: ", n_missing, " (", round(n_missing / n_total * 100, 2),
+			"% of data) recoded to -1 (Unknown)\n", sep = "")
 	}
+
+	school_num[is_out_of_range | is_missing] <- -1
+	df[[school_col]] <- school_num
 
 	df
 }
@@ -1110,16 +1113,18 @@ process_lf_data <- function(df, required_cols, mm_col = "mm", qtr_col = "qtr",
 #' Convert length-frequency school-type letter codes to numeric
 #'
 #' Translates the letter-coded school associations used in raised
-#' length-frequency data (F, L, U, "0", M, A) to the numeric scheme used for
-#' catch/effort school codes. LF data doesn't distinguish the finer
-#' categories the catch-data numeric scheme allows for F (4 or 5) or U (1 or
-#' 2), so this collapses each to a single fixed value (F->4, U->1) by
-#' convention, not because the mapping is otherwise ambiguous.
+#' length-frequency data (F, L, U, M, A, O -- per source description: F =
+#' Drifting or Anchored FAD, L = Log, U = Unassociated, M = Marine mammal
+#' (EPO), A = Associated, O = Other) to the numeric scheme in
+#' `school_type_lookup`. LF data doesn't distinguish the finer categories
+#' the numeric scheme allows for F (4 or 5, drifting vs anchored) or U (1
+#' or 2, unassociated vs feeding on baitfish), so this collapses each to a
+#' single fixed value (F->4, U->1) by convention.
 #'
 #' Values not present in `lookup` become NA in `output_col`, rather than
 #' being guessed at. Run `treat_school()` on the result afterward -- it
-#' applies the valid-range/unsure-recode logic and will treat those NAs as
-#' missing, not as out-of-range.
+#' applies the valid-code/unknown-recode logic and will treat those NAs as
+#' missing, not as unknown.
 #'
 #' @param df A dataframe.
 #' @param school_col Character; name of the raw letter-coded school column.
@@ -1128,14 +1133,14 @@ process_lf_data <- function(df, required_cols, mm_col = "mm", qtr_col = "qtr",
 #'   Default "school". The original `school_col` is left untouched for
 #'   traceability.
 #' @param lookup Named character vector mapping letter codes to numeric
-#'   codes. Default: F->4, L->3, U->1, "0"->10, M->6, A->7.
+#'   codes. Default: F->4, L->3, U->1, M->6, A->7, O->8.
 #'
 #' @return `df` with a new column `output_col` holding the numeric codes.
 #'
 #' @family cleaning steps
 #' @export
 convert_school_letters <- function(df, school_col = "school_LF", output_col = "school",
-								   lookup = c("F" = 4, "L" = 3, "U" = 1, "0" = 10, "M" = 6, "A" = 7)) {
+								   lookup = c("F" = 4, "L" = 3, "U" = 1, "M" = 6, "A" = 7, "O" = 8)) {
 	.check_cols_exist(df, school_col, "convert_school_letters")
 
 	raw_vals <- as.character(df[[school_col]])
@@ -1150,3 +1155,32 @@ convert_school_letters <- function(df, school_col = "school_LF", output_col = "s
 	df[[output_col]] <- recoded
 	df
 }
+
+#' School type identifiers reference table
+#'
+#' Reference table for purse-seine school-association codes (Reference
+#' Table 2). Used as the default `valid_codes` for treat_school() -- note
+#' this is NOT a contiguous numeric range (it includes -1)
+#'
+#' @format A data frame with columns:
+#' \describe{
+#'   \item{school_type_id}{Numeric school type code.}
+#'   \item{description}{Description of the school type.}
+#' }
+#' @export
+school_type_lookup <- data.frame(
+	school_type_id = c(0, 1, 2, 3, 4, 5, 6, 7, 8, -1),
+	description = c(
+		"No school type (only searching activity)",
+		"Unassociated/free school",
+		"Feeding on baitfish",
+		"Drifting log, debris or dead animal",
+		"Drifting raft, FAD or payao",
+		"Anchored raft, FAD or payao",
+		"Live whale",
+		"Live whale shark",
+		"Other",
+		"Unknown"
+	),
+	stringsAsFactors = FALSE
+)

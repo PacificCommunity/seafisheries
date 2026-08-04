@@ -59,9 +59,9 @@ a plain argument.
 
 ```{r}
 astrat_lookup <- data.frame(
-	ASTRAT     = c("5",  "0", "F",  "T"),
-	lon_offset = c(2.5,  5,   5,    10),
-	lat_offset = c(2.5,  5,   2.5,  5)
+	ASTRAT     = c("5",  "0", "F",  "T", "A", "1"),
+	lon_offset = c(2.5,  5,   5,    10, 5, 0.5),
+	lat_offset = c(2.5,  5,   2.5,  5, 2, 0.5)
 )
 
 valid_astrat <- astrat_lookup$ASTRAT
@@ -162,11 +162,23 @@ mappings below collapse multiple numeric values into one:
 
 ```{r, echo = FALSE}
 school_lookup_table <- data.frame(
-	"LF code"      = c("F",      "L", "U",      "0",             "M", "A"),
-	"Catch code"   = c("4 (or 5)", "3", "1 (or 2)", "10 (unsure)", "6", "7"),
+	school_type_id = c(-1, 0, 1, 2, 3, 4, 5, 6, 7, 8),
+	description = c(
+		"Unknown",
+		"No school type (only searching activity)",
+		"Unassociated/free school",
+		"Feeding on baitfish",
+		"Drifting log, debris or dead animal",
+		"Drifting raft, FAD or payao",
+		"Anchored raft, FAD or payao",
+		"Live whale",
+		"Live whale shark",
+		"Other"
+	),
+	"LF code" = c("", "", "U", "U", "L", "F", "F", "M", "A", "O"),
 	check.names = FALSE
 )
-knitr::kable(school_lookup_table, caption = "School-association code conversion (LF -> catch/effort)")
+knitr::kable(school_lookup_table, caption = "School-association code conversion (catch/effort -> LF)")
 ```
 
 `F` and `U` each cover two numeric codes in the catch/effort scheme; since
