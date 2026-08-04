@@ -1,0 +1,232 @@
+---
+title: "03 Processing Length Frequency Data"
+author: Romain Forestier
+editor_options: 
+  chunk_output_type: console
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{03 Processing Length Frequency Data}
+  %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
+---
+
+```{r, warning=FALSE, message=F, echo=FALSE}
+library(seafisheries)
+library(dplyr)
+stat_list <- list()
+library(here)
+dir.create(here("outputs"), showWarnings = FALSE, recursive = TRUE)
+```
+
+This document processes raised 5x5 length-frequency data. Unlike catch/effort
+data, gear type doesn't change the cleaning logic here, so there's no `gear`
+argument anywhere in this pipeline.
+
+## Load data and rename columns
+
+Renaming is hardcoded per source, same as the operational data pipeline. 
+This is metadata about *a specific* dataset, not something a function
+can infer.
+
+```{r}
+LF_dat <- readRDS(paste0(here(),"/inst/extdata/mockData/length_frequency_data.RDS"))
+
+LF_dat <- LF_dat %>% 
+	rename(id = ID,
+		   yr = YR,
+		   qtr = QTR,
+		   mm = MON,
+		   gr = GR,
+		   flag = FLAG_ID,
+		   fleet = FLEET_ID,
+		   latitude = LAT_SHORT,
+		   longitude = LON_SHORT,
+		   len = LEN,
+		   count = FREQ,
+		   school_LF = SCHTYPE_ID) %>% 
+	mutate(len = as.numeric(len))
+
+# ASTRAT and LSTRAT are kept under their original names
+```
+
+## Reference table: ASTRAT grid resolution
+
+`ASTRAT` encodes which grid resolution a record was aggregated to, and that
+resolution determines the offset added to raw coordinates to get a cell
+center. This table is specific to this data source and lives here, not in
+the package. `compute_grid_center()` (below) is generic and takes this as
+a plain argument.
+
+```{r}
+astrat_lookup <- data.frame(
+	ASTRAT     = c("5",  "0", "F",  "T"),
+	lon_offset = c(2.5,  5,   5,    10),
+	lat_offset = c(2.5,  5,   2.5,  5)
+)
+
+valid_astrat <- astrat_lookup$ASTRAT
+
+knitr::kable(astrat_lookup, caption = "ASTRAT resolution reference")
+```
+
+## Convert coordinates from degree-minutes to decimal degrees
+
+Same package function used for operational data; gear-agnostic, works on
+any lat/lon columns regardless of source.
+
+```{r}
+res <- convert_coordinates_df(LF_dat, lat_col = "latitude", lon_col = "longitude", report = TRUE)
+LF_dat <- res$data
+print(res$summary)
+```
+
+
+## Fill in missing month values
+
+`fill_missing_month()` derives `mm` from `qtr` (Q1->Jan, Q2->Apr, Q3->Jul,
+Q4->Oct) wherever `mm` is missing or invalid (here, `mm == 0`). If the
+column didn't exist at all it would be created entirely from `qtr`.
+
+```{r}
+LF_dat <- fill_missing_month(LF_dat, mm_col = "mm", qtr_col = "qtr")
+```
+
+
+
+## Remove invalid entries
+
+`remove_invalid()` drops rows with NA, NaN, Inf, or NULL in any of the
+columns considered essential here: coordinates and length. `ASTRAT`
+validity is handled separately below, not here.
+
+```{r}
+required_cols <- c("latitude", "longitude", "len")
+
+LF_dat <- remove_invalid(LF_dat, required_cols)
+```
+
+## Remove invalid ASTRAT values
+
+`filter_valid_categories()` drops rows whose `ASTRAT` isn't one of the
+resolutions in the reference table above. This also removes NA `ASTRAT`
+values, since `NA %in% valid_astrat` is FALSE.
+
+```{r}
+LF_dat <- filter_valid_categories(LF_dat, col = "ASTRAT", valid_values = valid_astrat)
+```
+
+## Compute grid-cell centers
+
+`compute_grid_center()` joins the ASTRAT reference table and adds the
+matching lon/lat offset, producing `lonCent`/`latCent`. Every `ASTRAT` value
+remaining at this point is already valid (previous step), so there should be
+no unmatched rows.
+
+```{r}
+LF_dat <- compute_grid_center(LF_dat, strat_col = "ASTRAT", lookup = astrat_lookup,
+							   lon_col = "longitude", lat_col = "latitude")
+```
+
+## Apply the bounding box
+
+`filter_bounding_box()` is the LF equivalent of `apply_pacific_mask()` used
+for operational data but without the `pmask_lookup` semi-join, since that
+lookup is built for the 1x1 grid and won't match ASTRAT's coarser cells.
+
+```{r}
+LF_dat <- filter_bounding_box(LF_dat, lat_col = "latCent", lon_col = "lonCent",
+							   lat_range = lat_range, lon_range = lon_range)
+```
+
+## Remove sparse samples
+
+`remove_sparse_lf_samples()` drops samples (grouped by the columns below)
+with fewer than 3 distinct length bins, or where every bin has the same
+count. Both cases carry no usable length-distribution information.
+
+```{r}
+group_cols <- c("yr", "qtr", "gr", "flag", "latCent", "lonCent", "ASTRAT", "school_LF")
+
+LF_dat <- remove_sparse_lf_samples(LF_dat, group_cols = group_cols, 
+									len_col = "len", freq_col = "count", min_bins = 3)
+```
+
+
+## Convert and clean school-association codes (for Purse Seine only)
+
+Length-frequency data encodes school association as letter codes, while
+catch/effort data uses numeric codes 1-7 (see `treat_school()`). The two
+schemes don't line up one-to-one. LF data doesn't distinguish the
+sub-categories the numeric scheme allows for some codes, so two of the six
+mappings below collapse multiple numeric values into one:
+
+```{r, echo = FALSE}
+school_lookup_table <- data.frame(
+	"LF code"      = c("F",      "L", "U",      "0",             "M", "A"),
+	"Catch code"   = c("4 (or 5)", "3", "1 (or 2)", "10 (unsure)", "6", "7"),
+	check.names = FALSE
+)
+knitr::kable(school_lookup_table, caption = "School-association code conversion (LF -> catch/effort)")
+```
+
+`F` and `U` each cover two numeric codes in the catch/effort scheme; since
+LF data can't distinguish between them, `F` always maps to `4` and `U`
+always maps to `1`, by convention rather than by any real distinction in
+the data. `0` (unknown) and anything not in this table map straight to
+`10`, matching how an out-of-range value would be handled if it showed up
+directly in catch/effort data.
+
+`convert_school_letters()` creates a new numeric `school` column from the
+raw `school_LF` letter codes, keeping `school_LF` untouched so the original
+code is still there to check against later. `treat_school()` then runs on
+`school` and catches anything `convert_school_letters()` couldn't map
+(left as NA) plus any numeric value that's still outside 1-7, using the
+same logic already applied to catch/effort data.
+
+```{r}
+LF_dat <- convert_school_letters(LF_dat, school_col = "school_LF", output_col = "school")
+LF_dat <- treat_school(LF_dat, school_col = "school")
+```
+
+
+## All of the above, in one call
+
+```{r}
+LF_dat_clean <- process_lf_data(
+	df            = LF_dat,
+	required_cols = required_cols,
+	mm_col        = "mm",
+	qtr_col       = "qtr",
+	strat_col     = "ASTRAT",
+	valid_strat   = valid_astrat,
+	strat_lookup  = astrat_lookup,
+	lon_col       = "longitude",
+	lat_col       = "latitude",
+	lat_range     = lat_range,
+	lon_range     = lon_range,
+	group_cols    = group_cols,
+	len_col       = "len",
+	freq_col      = "count",
+	min_bins      = 3
+)
+```
+
+Note this chunk reruns the whole pipeline on `LF_dat`, which the individual
+sections above already cleaned. This is a side-by-side reference, not a
+script meant to run start to finish; reload raw data first if you want to
+actually execute the wrapper version.
+
+```{r}
+saveRDS(LF_dat_clean, here("outputs", "LF_clean.RDS"))
+```
+
+## Disaggregate to 1cm bins
+
+Separate from cleaning. `bin_to_1cm()` expands each row's `LSTRAT`-sized
+bin into individual 1cm bins, splitting `count` proportionally. Run this
+after cleaning, on the cleaned data, not as part of `process_lf_data()`.
+
+```{r}
+LF_uniform_bins <- bin_to_1cm(LF_dat_clean)
+saveRDS(LF_uniform_bins, here("outputs", "LF_5x5_bin1.RDS"))
+```

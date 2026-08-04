@@ -23,10 +23,18 @@ Drops rows more than \code{n_sd} standard deviations from the column mean.
 \seealso{
 Other cleaning steps:
 \code{\link[=apply_pacific_mask]{apply_pacific_mask()}},
+\code{\link[=bin_to_1cm]{bin_to_1cm()}},
+\code{\link[=compute_grid_center]{compute_grid_center()}},
+\code{\link[=convert_school_letters]{convert_school_letters()}},
+\code{\link[=fill_missing_month]{fill_missing_month()}},
+\code{\link[=filter_bounding_box]{filter_bounding_box()}},
+\code{\link[=filter_valid_categories]{filter_valid_categories()}},
 \code{\link[=process_catch_data]{process_catch_data()}},
+\code{\link[=process_lf_data]{process_lf_data()}},
 \code{\link[=remove_dummy_fisheries]{remove_dummy_fisheries()}},
 \code{\link[=remove_duplicates]{remove_duplicates()}},
 \code{\link[=remove_invalid]{remove_invalid()}},
+\code{\link[=remove_sparse_lf_samples]{remove_sparse_lf_samples()}},
 \code{\link[=remove_zero_fisheries]{remove_zero_fisheries()}},
 \code{\link[=treat_hbf]{treat_hbf()}},
 \code{\link[=treat_school]{treat_school()}},

@@ -331,8 +331,6 @@ cat("  Spatial extent:",
 	round(min(EC_raw$longitude), 1), "to", round(max(EC_raw$longitude), 1), "°E\n")
 ```
 
-TODO
 
-check if it works with raised data
 
 

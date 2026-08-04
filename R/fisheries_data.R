@@ -852,3 +852,301 @@ process_catch_data <- function(df, required_cols, catch_cols, effort_col,
 	}
 	df
 }
+
+#' Fill in missing or invalid month values from quarter
+#'
+#' Derives month from quarter (Q1->1, Q2->4, Q3->7, Q4->10). If `mm_col`
+#' doesn't exist in `df` at all, it is created entirely from `qtr_col`. If it
+#' exists, only missing/invalid entries (NA, or outside 1-12) are filled.
+#'
+#' @param df A dataframe.
+#' @param mm_col Character; name of the month column (created if absent).
+#'   Default "mm".
+#' @param qtr_col Character; name of the quarter column (1-4). Default "qtr".
+#'
+#' @return `df` with `mm_col` present and filled from `qtr_col` wherever
+#'   missing or invalid.
+#'
+#' @family cleaning steps
+#' @export
+fill_missing_month <- function(df, mm_col = "mm", qtr_col = "qtr") {
+	.check_cols_exist(df, qtr_col, "fill_missing_month")
+
+	qtr_to_month <- function(q) {
+		dplyr::case_when(
+			q == 1 ~ 1, q == 2 ~ 4, q == 3 ~ 7, q == 4 ~ 10,
+			TRUE ~ NA_real_
+		)
+	}
+
+	if (!mm_col %in% names(df)) {
+		df[[mm_col]] <- qtr_to_month(df[[qtr_col]])
+		cat("Column '", mm_col, "' created entirely from '", qtr_col, "'\n", sep = "")
+		return(df)
+	}
+
+	is_invalid <- is.na(df[[mm_col]]) | !(df[[mm_col]] %in% 1:12)
+	n_invalid <- sum(is_invalid)
+
+	df[[mm_col]][is_invalid] <- qtr_to_month(df[[qtr_col]][is_invalid])
+
+	if (n_invalid > 0) {
+		cat(n_invalid, " entries with missing/invalid '", mm_col, "' filled from '", qtr_col, "' (",
+			round(n_invalid / nrow(df) * 100, 2), "% of data)\n", sep = "")
+	}
+
+	df
+}
+
+#' Remove rows with invalid categorical values in a column
+#'
+#' Generic category-validity filter -- e.g. for strata codes, school types,
+#' or gear codes where only a known set of values is meaningful. Note this
+#' also drops NA values in `col`, since `NA %in% valid_values` is FALSE.
+#'
+#' @param df A dataframe.
+#' @param col Character; name of the column to check.
+#' @param valid_values Vector of allowed values.
+#'
+#' @return The filtered dataframe.
+#'
+#' @family cleaning steps
+#' @export
+filter_valid_categories <- function(df, col, valid_values) {
+	.check_cols_exist(df, col, "filter_valid_categories")
+	n0 <- nrow(df)
+	df_out <- df %>% filter(.data[[col]] %in% valid_values)
+	report_removal(n0 - nrow(df_out), n0, paste0("invalid ", col, " values"))
+	df_out
+}
+
+#' Compute grid-cell center coordinates from a strata lookup table
+#'
+#' Adds a lon/lat offset to raw coordinates based on a strata code, using a
+#' lookup table supplied by the caller. Offsets are data-source-specific
+#' (e.g. resolution encoded in a stratification column) -- build the lookup
+#' table in the calling document, not in the package.
+#'
+#' @param df A dataframe.
+#' @param strat_col Character; name of the strata code column (e.g.
+#'   "ASTRAT"). Must exist with the same name in both `df` and `lookup`.
+#' @param lookup A dataframe with a column matching `strat_col`, plus
+#'   `lon_offset` and `lat_offset`.
+#' @param lon_col,lat_col Character; names of the raw longitude/latitude
+#'   columns in `df` to offset.
+#'
+#' @return `df` with new columns `lonCent`/`latCent`. Rows whose `strat_col`
+#'   value has no match in `lookup` get NA grid centers -- run
+#'   `filter_valid_categories()` against the same set of values beforehand
+#'   if that's not what you want.
+#'
+#' @family cleaning steps
+#' @export
+compute_grid_center <- function(df, strat_col, lookup, lon_col, lat_col) {
+	.check_cols_exist(df, c(strat_col, lon_col, lat_col), "compute_grid_center")
+	.check_cols_exist(lookup, c(strat_col, "lon_offset", "lat_offset"), "compute_grid_center")
+
+	df_out <- df %>%
+		left_join(lookup, by = strat_col) %>%
+		mutate(
+			lonCent = .data[[lon_col]] + lon_offset,
+			latCent = .data[[lat_col]] + lat_offset
+		) %>%
+		select(-lon_offset, -lat_offset)
+
+	n_unmatched <- sum(is.na(df_out$lonCent) | is.na(df_out$latCent))
+	if (n_unmatched > 0) {
+		cat(n_unmatched, " rows had no matching '", strat_col, "' in the lookup table (",
+			round(n_unmatched / nrow(df_out) * 100, 2), "% of data)\n", sep = "")
+	}
+
+	df_out
+}
+
+#' Filter to a latitude/longitude bounding box
+#'
+#' Unlike `apply_pacific_mask()`, this does not semi-join against a grid
+#' lookup table -- use it when data resolution doesn't match
+#' `pmask_lookup`'s 1x1 grid (e.g. aggregated length-frequency data at 5x5
+#' or coarser strata). No default range is provided (unlike
+#' `apply_pacific_mask()`, which hardcodes the package's `lat_range`/
+#' `lon_range`) to avoid a self-referential default -- pass the package
+#' constants explicitly if you want the same bounds.
+#'
+#' @param df A dataframe.
+#' @param lat_col,lon_col Character; names of latitude/longitude columns.
+#' @param lat_range,lon_range Numeric vectors of length 2.
+#'
+#' @return The filtered dataframe.
+#'
+#' @family cleaning steps
+#' @export
+filter_bounding_box <- function(df, lat_col, lon_col, lat_range, lon_range) {
+	.check_cols_exist(df, c(lat_col, lon_col), "filter_bounding_box")
+	n0 <- nrow(df)
+	df_out <- df %>%
+		filter(.data[[lat_col]] >= lat_range[1] & .data[[lat_col]] <= lat_range[2],
+			   .data[[lon_col]] >= lon_range[1] & .data[[lon_col]] <= lon_range[2])
+	report_removal(n0 - nrow(df_out), n0, "outside bounding box")
+	df_out
+}
+
+#' Remove length-frequency samples with insufficient bin diversity
+#'
+#' Drops groups (one row per group = one sample) that have fewer than
+#' `min_bins` distinct length values, or where every row in the group has
+#' the same frequency/count value (uninformative sample).
+#'
+#' @param df A dataframe.
+#' @param group_cols Character vector of columns identifying a sample.
+#' @param len_col Character; name of the length column. Default "len".
+#' @param freq_col Character; name of the frequency/count column. Default
+#'   "count".
+#' @param min_bins Integer; minimum distinct length bins required. Default 3.
+#'
+#' @return The filtered dataframe.
+#'
+#' @family cleaning steps
+#' @export
+remove_sparse_lf_samples <- function(df, group_cols, len_col = "len", freq_col = "count", min_bins = 3) {
+	.check_cols_exist(df, c(group_cols, len_col, freq_col), "remove_sparse_lf_samples")
+	n0 <- nrow(df)
+
+	df_out <- df %>%
+		group_by(across(all_of(group_cols))) %>%
+		filter(n_distinct(.data[[len_col]]) >= min_bins,
+			   n_distinct(.data[[freq_col]]) > 1) %>%
+		ungroup()
+
+	report_removal(n0 - nrow(df_out), n0,
+				   paste0("samples with <", min_bins, " length bins or a single frequency value"))
+	df_out
+}
+
+#' Disaggregate length-frequency bins to 1cm resolution
+#'
+#' Expands each row with bin size `LSTRAT > 1` into `LSTRAT` separate 1cm
+#' bins, splitting `count` proportionally across them. Rewritten from the
+#' original dplyr `uncount()` + grouped `row_number()` version to plain base
+#' R row-replication (`rep()`/`sequence()`), which avoids a grouped mutate
+#' over every expanded row and should be noticeably faster on large data.
+#' Behavior should match the original except that it no longer overwrites
+#' any pre-existing `id` column -- the original's `mutate(id = row_number())`
+#' would have clobbered a real trip ID with a meaningless row counter if one
+#' was already present in the data.
+#'
+#' @param df A dataframe with columns `len`, `count`, `LSTRAT`. `LSTRAT` is
+#'   assumed to be a positive integer with no NAs -- filter/impute upstream
+#'   if that's not guaranteed.
+#'
+#' @return The disaggregated dataframe (base data.frame), `LSTRAT` reset to
+#'   1 throughout.
+#'
+#' @family cleaning steps
+#' @export
+bin_to_1cm <- function(df) {
+	.check_cols_exist(df, c("len", "count", "LSTRAT"), "bin_to_1cm")
+
+	rep_counts <- df$LSTRAT
+	offsets <- sequence(rep_counts) - 1
+
+	df_out <- df[rep(seq_len(nrow(df)), rep_counts), ]
+	df_out$len <- df_out$len + offsets
+	df_out$count <- df_out$count / rep(rep_counts, rep_counts)
+	df_out$LSTRAT <- 1
+	rownames(df_out) <- NULL
+
+	df_out
+}
+
+#' Process raw length-frequency data into cleaned form
+#'
+#' Runs `fill_missing_month()`, `remove_invalid()`,
+#' `filter_valid_categories()`, `compute_grid_center()`,
+#' `filter_bounding_box()`, and `remove_sparse_lf_samples()` in sequence.
+#' Bin disaggregation (`bin_to_1cm()`) is NOT included -- it's a distinct
+#' downstream step, not a cleaning step, call it separately on the result.
+#' No gear branching, unlike `process_catch_data()` -- gear isn't relevant
+#' to this cleaning pipeline.
+#'
+#' @param df A dataframe, pre-renamed to standard column names.
+#' @param required_cols Character vector of columns checked for validity by
+#'   `remove_invalid()` (e.g. length and raw coordinate columns).
+#' @param mm_col,qtr_col Character; month/quarter columns, passed to
+#'   `fill_missing_month()`.
+#' @param strat_col Character; strata code column, passed to
+#'   `filter_valid_categories()` and `compute_grid_center()`.
+#' @param valid_strat Vector of allowed strata codes.
+#' @param strat_lookup A dataframe mapping `strat_col` to `lon_offset`/
+#'   `lat_offset`, passed to `compute_grid_center()`.
+#' @param lon_col,lat_col Character; raw coordinate columns.
+#' @param lat_range,lon_range Numeric vectors of length 2 bounding the
+#'   region of interest, passed to `filter_bounding_box()`.
+#' @param group_cols Character vector of columns identifying one LF sample,
+#'   passed to `remove_sparse_lf_samples()`.
+#' @param len_col,freq_col Character; length/frequency columns.
+#' @param min_bins Integer; minimum distinct length bins per sample.
+#'   Default 3.
+#'
+#' @return The cleaned dataframe.
+#'
+#' @family cleaning steps
+#' @export
+process_lf_data <- function(df, required_cols, mm_col = "mm", qtr_col = "qtr",
+							strat_col, valid_strat, strat_lookup,
+							lon_col, lat_col, lat_range, lon_range,
+							group_cols, len_col = "len", freq_col = "count", min_bins = 3) {
+
+	df <- fill_missing_month(df, mm_col = mm_col, qtr_col = qtr_col)
+	df <- remove_invalid(df, required_cols)
+	df <- filter_valid_categories(df, strat_col, valid_strat)
+	df <- compute_grid_center(df, strat_col, strat_lookup, lon_col = lon_col, lat_col = lat_col)
+	df <- filter_bounding_box(df, lat_col = "latCent", lon_col = "lonCent",
+							  lat_range = lat_range, lon_range = lon_range)
+	df <- remove_sparse_lf_samples(df, group_cols, len_col = len_col, freq_col = freq_col, min_bins = min_bins)
+	df
+}
+
+#' Convert length-frequency school-type letter codes to numeric
+#'
+#' Translates the letter-coded school associations used in raised
+#' length-frequency data (F, L, U, "0", M, A) to the numeric scheme used for
+#' catch/effort school codes. LF data doesn't distinguish the finer
+#' categories the catch-data numeric scheme allows for F (4 or 5) or U (1 or
+#' 2), so this collapses each to a single fixed value (F->4, U->1) by
+#' convention, not because the mapping is otherwise ambiguous.
+#'
+#' Values not present in `lookup` become NA in `output_col`, rather than
+#' being guessed at. Run `treat_school()` on the result afterward -- it
+#' applies the valid-range/unsure-recode logic and will treat those NAs as
+#' missing, not as out-of-range.
+#'
+#' @param df A dataframe.
+#' @param school_col Character; name of the raw letter-coded school column.
+#'   Default "school_LF".
+#' @param output_col Character; name of the new numeric column to create.
+#'   Default "school". The original `school_col` is left untouched for
+#'   traceability.
+#' @param lookup Named character vector mapping letter codes to numeric
+#'   codes. Default: F->4, L->3, U->1, "0"->10, M->6, A->7.
+#'
+#' @return `df` with a new column `output_col` holding the numeric codes.
+#'
+#' @family cleaning steps
+#' @export
+convert_school_letters <- function(df, school_col = "school_LF", output_col = "school",
+								   lookup = c("F" = 4, "L" = 3, "U" = 1, "0" = 10, "M" = 6, "A" = 7)) {
+	.check_cols_exist(df, school_col, "convert_school_letters")
+
+	raw_vals <- as.character(df[[school_col]])
+	recoded <- unname(lookup[raw_vals])
+
+	n_unmapped <- sum(!raw_vals %in% names(lookup) & !is.na(raw_vals))
+	if (n_unmapped > 0) {
+		cat(n_unmapped, " entries with '", school_col, "' values not in the lookup, set to NA in '",
+			output_col, "' (", round(n_unmapped / nrow(df) * 100, 2), "% of data)\n", sep = "")
+	}
+
+	df[[output_col]] <- recoded
+	df
+}

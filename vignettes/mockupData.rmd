@@ -18,11 +18,6 @@ knitr::opts_chunk$set(eval = T, echo = F, message = F, warning = F)
 # Operational data
 
 ```{r}
-cap_dat <- read.csv("/home/romainf/Documents/FisheriesDatabases/operational_captain_longline_logsheet_catch_effort_data_yft_bet_skj_oth.csv")
-
-```
-
-```{r}
 # Helper to convert lat/lon back to DDDMM format
 decimal_to_dddmm <- function(decimal, is_lon = FALSE) {
   if (is.na(decimal)) return(NA)
@@ -264,3 +259,227 @@ test_data <- generate_mock_captain_LL()
 saveRDS(object = test_data, file = "mockData/operational_data.RDS")
 ```
 
+# aggregated length frequency data
+
+# Length frequency data
+
+Dropped the duplicate `decimal_to_dddmm()` definition here since it's
+already defined above in the operational data section -- reused as-is.
+
+Structural difference from the operational data generator above: LF
+cleaning operates on *samples* (groups of rows sharing
+yr/qtr/gr/flag/ASTRAT/school/coordinates), not independent rows --
+`remove_sparse_lf_samples()` needs >=3 distinct length bins per group with
+non-identical counts to survive. So generation here is sample-based: each
+call to `make_lf_sample()` returns several rows sharing one grouping key,
+not one row.
+
+```{r}
+# One LF sample = several length-bin rows sharing one grouping key.
+# outside_box pushes coordinates far enough outside lat_range/lon_range that
+# they stay outside even after compute_grid_center()'s largest offset (10
+# degrees, for ASTRAT "T") -- margins below are set with that in mind.
+make_lf_sample <- function(sample_id, n_bins, astrat, same_count = FALSE,
+							mm_zero = FALSE, outside_box = FALSE, stats) {
+
+	yr     <- sample(stats$yr_min:stats$yr_max, 1)
+	qtr    <- sample(1:4, 1)
+	mm     <- if (mm_zero) 0 else c(1, 4, 7, 10)[qtr]
+	gr     <- sample(stats$gears, 1)
+	flag   <- sample(stats$flags, 1)
+	fleet  <- sample(stats$fleets, 1)
+	school <- sample(stats$schools, 1)
+	lstrat <- sample(c(1, 1, 1, 2, 5), 1)  # mostly 1, sometimes >1 to exercise bin_to_1cm
+
+	if (outside_box) {
+		side <- sample(c("lon_low", "lon_high", "lat_low", "lat_high"), 1)
+		lat <- runif(1, stats$lat_min, stats$lat_max)
+		lon <- runif(1, stats$lon_min, stats$lon_max)
+		if (side == "lon_low")  lon <- runif(1, 40, 75)
+		if (side == "lon_high") lon <- runif(1, 300, 350)
+		if (side == "lat_low")  lat <- runif(1, -75, -66)
+		if (side == "lat_high") lat <- runif(1, 76, 85)
+	} else {
+		lat <- runif(1, stats$lat_min, stats$lat_max)
+		lon <- runif(1, stats$lon_min, stats$lon_max)
+	}
+
+	len_vals <- sort(sample(seq(stats$len_min, stats$len_max, by = 2), n_bins))
+	if (same_count) {
+		counts <- rep(round(abs(rnorm(1, stats$count_mean, stats$count_sd))) + 1, n_bins)
+	} else {
+		counts <- round(abs(rnorm(n_bins, stats$count_mean, stats$count_sd))) + 1
+	}
+
+	data.frame(
+		ID         = paste0(sample_id, "_", seq_len(n_bins)),
+		YR         = yr,
+		QTR        = qtr,
+		MON        = mm,
+		GR         = gr,
+		FLAG_ID    = flag,
+		FLEET_ID   = fleet,
+		LAT_SHORT  = decimal_to_dddmm(lat, is_lon = FALSE),
+		LON_SHORT  = decimal_to_dddmm(lon, is_lon = TRUE),
+		LEN        = len_vals,
+		LSTRAT     = lstrat,
+		FREQ       = counts,
+		ASTRAT     = astrat,
+		SCHTYPE_ID = school,
+		stringsAsFactors = FALSE
+	)
+}
+```
+
+```{r}
+generate_mock_LF <- function(stats = NULL) {
+
+	if (is.null(stats)) {
+		stats <- list(
+			yr_min = 1990, yr_max = 2023,
+			lat_min = -54.5, lat_max = 64.5,
+			lon_min = 89.5, lon_max = 288.5,
+			len_min = 20, len_max = 180,
+			count_mean = 15, count_sd = 8,
+			flags = c("JP", "TW", "CN", "US", "AU"),
+			fleets = c(1, 2, 3),
+			gears = c("L", "S", "P"),
+			schools = c("F", "L", "U", "M", "A", "0", "N")
+		)
+	}
+
+	valid_astrat <- c("5", "0", "F", "T")
+
+	# -- category sizes, in samples/groups, not rows --
+	n_good        <- 300  # >=3 bins, varying counts, valid everything
+	n_bad_astrat  <- 15   # ASTRAT outside {5,0,F,T} -> filter_valid_categories
+	n_outside_box <- 20   # coords outside lat_range/lon_range -> filter_bounding_box
+	n_mm_zero     <- 25   # MON = 0 -> fill_missing_month
+	n_sparse      <- 15   # 1-2 length bins -> remove_sparse_lf_samples
+	n_flat_count  <- 15   # >=3 bins, identical count throughout -> remove_sparse_lf_samples
+
+	good_samples <- lapply(seq_len(n_good), function(i) {
+		make_lf_sample(paste0("good", i), n_bins = sample(3:6, 1),
+						astrat = sample(valid_astrat, 1), stats = stats)
+	})
+
+	bad_astrat_samples <- lapply(seq_len(n_bad_astrat), function(i) {
+		make_lf_sample(paste0("badastrat", i), n_bins = sample(3:6, 1),
+						astrat = sample(c("9", "X", "2", "Z"), 1), stats = stats)
+	})
+
+	outside_box_samples <- lapply(seq_len(n_outside_box), function(i) {
+		make_lf_sample(paste0("outside", i), n_bins = sample(3:6, 1),
+						astrat = sample(valid_astrat, 1), outside_box = TRUE, stats = stats)
+	})
+
+	mm_zero_samples <- lapply(seq_len(n_mm_zero), function(i) {
+		make_lf_sample(paste0("mmzero", i), n_bins = sample(3:6, 1),
+						astrat = sample(valid_astrat, 1), mm_zero = TRUE, stats = stats)
+	})
+
+	sparse_samples <- lapply(seq_len(n_sparse), function(i) {
+		make_lf_sample(paste0("sparse", i), n_bins = sample(1:2, 1),
+						astrat = sample(valid_astrat, 1), stats = stats)
+	})
+
+	flat_count_samples <- lapply(seq_len(n_flat_count), function(i) {
+		make_lf_sample(paste0("flat", i), n_bins = sample(3:6, 1),
+						astrat = sample(valid_astrat, 1), same_count = TRUE, stats = stats)
+	})
+
+	all_data <- do.call(rbind, c(good_samples, bad_astrat_samples, outside_box_samples,
+								  mm_zero_samples, sparse_samples, flat_count_samples))
+
+	# -- NA injection: knock out len or a coordinate on a handful of rows.
+	#    Applied across the whole combined set, so it can land inside a
+	#    sparse/flat sample too and compound with that category rather than
+	#    staying isolated -- fine for exercising every function, but don't
+	#    expect exact per-category removal counts to match the n_* values
+	#    above one-for-one.
+	n_na <- 20
+	na_rows <- sample(nrow(all_data), n_na)
+	na_fields <- c("LEN", "LAT_SHORT", "LON_SHORT")
+	for (i in na_rows) {
+		all_data[i, sample(na_fields, 1)] <- NA
+	}
+
+	# -- coordinate format errors: same 15 malformed DDDMM strings as the
+	#    operational data generator's coord_error_data above, since
+	#    convert_coordinate()'s failure categories don't depend on which
+	#    pipeline is calling it. One single-bin sample per string.
+	n_coord_errors <- 15
+	coord_error_rows <- do.call(rbind, lapply(seq_len(n_coord_errors), function(i) {
+		make_lf_sample(paste0("coorderr", i), n_bins = 1,
+						astrat = sample(valid_astrat, 1), stats = stats)
+	}))
+
+	coord_error_rows$LAT_SHORT <- c(
+		"N",                    # cardinal_only
+		"4530X",                # unknown_cardinal
+		"45.30.5N",             # multiple_decimals
+		"45A30N",                # invalid_format
+		"5N",                   # insufficient_digits
+		"4565N",                # minutes_out_of_range (65 minutes)
+		"4530E",                # wrong_cardinal_for_type (E on latitude)
+		"9530N",                # latitude_out_of_range (95 degrees)
+		"",                     # empty string (empty_or_null)
+		"12.34.56S",            # multiple_decimals
+		"3070N",                # minutes_out_of_range (70 minutes)
+		"4530W",                # wrong_cardinal_for_type (W on latitude)
+		"2X45N",                # invalid_format
+		"S",                    # cardinal_only
+		"1234Y"                 # unknown_cardinal
+	)
+	coord_error_rows$LON_SHORT <- c(
+		"E",                    # cardinal_only
+		"12025Z",               # unknown_cardinal
+		"120.25.5E",            # multiple_decimals
+		"120B25W",              # invalid_format
+		"25E",                  # insufficient_digits
+		"12065W",               # minutes_out_of_range (65 minutes)
+		"12025N",               # wrong_cardinal_for_type (N on longitude)
+		"36525E",               # longitude_out_of_range (365 degrees)
+		"",                     # empty string
+		"150.30.25W",           # multiple_decimals
+		"17580E",               # minutes_out_of_range (80 minutes)
+		"14530S",               # wrong_cardinal_for_type (S on longitude)
+		"1X5025E",              # invalid_format
+		"W",                    # cardinal_only
+		"9999Q"                 # unknown_cardinal
+	)
+
+	all_data <- rbind(all_data, coord_error_rows)
+
+	# Shuffle
+	all_data <- all_data[sample(nrow(all_data)), ]
+	rownames(all_data) <- NULL
+
+	all_data
+}
+
+decimal_to_dddmm <- function(decimal, is_lon = FALSE) {
+	if (is.na(decimal)) return(NA)
+	if (is_lon && decimal > 180) {
+		decimal <- 360 - decimal
+		direction <- "W"
+	} else if (is_lon) {
+		direction <- "E"
+	} else {
+		direction <- ifelse(decimal < 0, "S", "N")
+	}
+	degrees <- floor(abs(decimal))
+	minutes <- (abs(decimal) - degrees) * 60
+	if (is_lon) {
+		dddmm <- sprintf("%03d%05.2f", degrees, minutes)
+	} else {
+		dddmm <- sprintf("%02d%05.2f", degrees, minutes)
+	}
+	paste0(dddmm, direction)
+}
+```
+
+```{r}
+mock_lf <- generate_mock_LF()
+saveRDS(object = mock_lf, file = "inst/extdata/mockData/length_frequency_data.RDS")
+```
