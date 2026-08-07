@@ -1,5 +1,8 @@
-#' @importFrom dplyr left_join mutate select filter group_by summarise bind_rows rename
+#' @import dplyr
 #' @importFrom rlang .data := !!
+#' @importFrom lubridate month year make_date
+#' @importFrom purrr pmap
+#' @importFrom tidyr unnest_wider drop_na
 NULL
 
 #' Convert Cardinal Coordinates to Decimal Degrees (0-360 longitude range)
@@ -825,7 +828,7 @@ process_catch_data <- function(df, required_cols, catch_cols, effort_col,
 							   return_dummy = FALSE) {
 
 	if (!is.null(gear)) {
-		gear <- match.arg(gear, c("L", "S"))
+		gear <- match.arg(gear, c("L", "S", "P", "O", "T", "G", "H", "K", "R"))
 	}
 
 	df <- remove_invalid(df, required_cols)
@@ -1184,3 +1187,295 @@ school_type_lookup <- data.frame(
 	),
 	stringsAsFactors = FALSE
 )
+
+#' Great-circle distance between two points
+#'
+#' Haversine formula. Vectorized: lat1/lon1 can be scalars while lat2/lon2
+#' are vectors (or vice versa), following standard R recycling.
+#'
+#' @param lat1,lon1 Numeric; latitude/longitude of the first point(s), in
+#'   decimal degrees.
+#' @param lat2,lon2 Numeric; latitude/longitude of the second point(s), in
+#'   decimal degrees.
+#'
+#' @return Numeric distance(s) in kilometers.
+#'
+#' @family hampel filter
+#' @export
+calculate_distance <- function(lat1, lon1, lat2, lon2) {
+	lat1_rad <- lat1 * pi / 180
+	lon1_rad <- lon1 * pi / 180
+	lat2_rad <- lat2 * pi / 180
+	lon2_rad <- lon2 * pi / 180
+
+	R <- 6371  # Earth's radius in km
+	dlat <- lat2_rad - lat1_rad
+	dlon <- lon2_rad - lon1_rad
+
+	a <- sin(dlat / 2)^2 + cos(lat1_rad) * cos(lat2_rad) * sin(dlon / 2)^2
+	c <- 2 * atan2(sqrt(a), sqrt(1 - a))
+	R * c
+}
+
+#' Hampel filter for a single length-frequency mean-length observation
+#'
+#' Internal worker for [apply_hampel()], called once per (region, date) via
+#' `pmap()`. Flags `value` (mean length) as an outlier if it's more than
+#' `k` scaled-MADs from the median of same-region values within
+#' `month_window` months, in `ref_data`. Same self-inclusion note as
+#' [hampel_CE_batch()]: `ref_data` includes the observation itself.
+#'
+#' @param date_ Date; date of the observation.
+#' @param reg Integer/character; region identifier.
+#' @param value Numeric; mean length value being tested.
+#' @param month_window Numeric; +/- months defining the time window.
+#' @param k Numeric; number of (scaled) MADs defining the outlier threshold.
+#' @param mad_scale Numeric; MAD-to-SD scaling constant.
+#' @param ref_data A dataframe with columns `date`, `region`, and whatever
+#'   `what` names.
+#' @param what Character; name of the column in `ref_data` to compare
+#'   `value` against. Default "mean_len".
+#'
+#' @return A list with `outlier` (logical), `n_points` (reference points
+#'   found), and `mad` (scaled MAD used).
+#'
+#' @family hampel filter
+#' @export
+hampel_LF <- function(date_, reg, value, month_window, k, mad_scale, ref_data, what = "mean_len") {
+	mad_value <- NA_real_
+	outlier <- FALSE
+	n_points <- NA_integer_
+
+	if (value > 0) {
+		values <- ref_data %>%
+			filter(date >= (date_ - months(month_window)),
+				   date <= (date_ + months(month_window)),
+				   region == reg) %>%
+			pull(.data[[what]])
+		n_points <- length(values)
+
+		if (n_points >= 3) {
+			med <- median(values, na.rm = TRUE)
+			mad_value <- mad_scale * median(abs(values - med), na.rm = TRUE)
+			outlier <- abs(value - med) > (k * mad_value)
+		}
+	}
+
+	list(outlier = outlier, n_points = n_points, mad = mad_value)
+}
+
+#' Hampel filter for catch/effort CPUE, applied per fishery
+#'
+#' For each row, compares its CPUE against the median/MAD of same-month
+#' CPUE values within `year_window` years and `radius_km` kilometers of it,
+#' among the rows in `df`, and caps CPUE from above at
+#' `median + k * (mad_scale-weighted MAD)` if it exceeds that. Only rows
+#' with at least 3 reference points (in both the time window and the radius)
+#' get a computed cap; others pass through unchanged with `n_points`/`mad`
+#' left NA.
+#'
+#' Precomputes the time-window reference subset once per unique (yr, mm)
+#' pair present in `df`. Distances are still computed one query point at a time
+#' against the (much smaller, precomputed) reference subset. Used internally
+#' by [apply_hampel()] (`type = "CE"`); exported so it can be run directly.
+#'
+#' @param df CPUE>0 subset for one fishery, with columns `date`, `lat`,
+#'   `lon`, `CPUE` (same as `data_CPUEpos` inside [apply_hampel()]).
+#' @param year_window Numeric; +/- years defining the time window.
+#' @param radius_km Numeric; spatial radius in km.
+#' @param k Numeric; number of (scaled) MADs defining the outlier threshold.
+#' @param mad_scale Numeric; MAD-to-SD scaling constant. Default 1.4826
+#'   (standard constant for consistency with a normal distribution).
+#'
+#' @return `df` with `newvalue` (capped CPUE), `n_points` (reference points
+#'   found), and `mad` (scaled MAD used) columns added.
+#'
+#' @family hampel filter
+#' @export
+hampel_CE_batch <- function(df, year_window, radius_km, k, mad_scale = 1.4826) {
+	.check_cols_exist(df, c("date", "lat", "lon", "CPUE"), "hampel_CE_batch")
+
+	yr_vec <- year(df$date)
+	mm_vec <- month(df$date)
+
+	newvalue <- df$CPUE
+	n_points <- rep(NA_integer_, nrow(df))
+	mad_out  <- rep(NA_real_, nrow(df))
+
+	yr_mm_groups <- unique(data.frame(yr = yr_vec, mm = mm_vec))
+
+	for (g in seq_len(nrow(yr_mm_groups))) {
+		g_yr <- yr_mm_groups$yr[g]
+		g_mm <- yr_mm_groups$mm[g]
+
+		ref_idx <- which(mm_vec == g_mm & yr_vec >= g_yr - year_window & yr_vec <= g_yr + year_window)
+		if (length(ref_idx) < 3) next
+
+		query_idx <- which(yr_vec == g_yr & mm_vec == g_mm)
+
+		ref_lat <- df$lat[ref_idx]
+		ref_lon <- df$lon[ref_idx]
+		ref_val <- df$CPUE[ref_idx]
+
+		for (qi in query_idx) {
+			d <- calculate_distance(df$lat[qi], df$lon[qi], ref_lat, ref_lon)
+			within_vals <- ref_val[d <= radius_km]
+			np <- length(within_vals)
+			n_points[qi] <- np
+			if (np >= 3) {
+				med <- median(within_vals, na.rm = TRUE)
+				mad_value <- mad_scale * median(abs(within_vals - med), na.rm = TRUE)
+				mad_out[qi] <- mad_value
+				newvalue[qi] <- min(df$CPUE[qi], med + k * mad_value)
+			}
+		}
+	}
+
+	df$newvalue <- newvalue
+	df$n_points <- n_points
+	df$mad <- mad_out
+	df
+}
+
+#' Apply a Hampel filter per fishery, for catch/effort or length-frequency data
+#'
+#' Loops over each fishery (`f`) in `df` and runs [hampel_CE_batch()] (for
+#' `type = "CE"`) or [hampel_LF()] row-by-row via `pmap()` (for
+#' `type = "LF"`), printing a running summary per fishery as it goes.
+#'
+#' `type = "CE"` expects `df` to have `f`, `yr`, `mm`, `lat`, `lon`, `E`,
+#' `C`, and `CPUE` (compute `CPUE = C / E` beforehand).
+#' Caps CPUE from above per [hampel_CE_batch()], then
+#' backs out an adjusted effort (`adjusted_E = C / newvalue`) holding catch
+#' fixed. This assumes catch is more reliable than effort when the two
+#' disagree.
+#'
+#' `type = "LF"` expects `df` to have `f`, `yr`, `mm`, `lon_from`, `lon_to`,
+#' `lat_from`, `lat_to`, `len`, `freq`.
+#'
+#' Performance note: each row/group independently re-filters and re-scans
+#' `ref_data`, giving O(n) work per row and O(n^2) overall per fishery.
+#' Not restructured here, fine at moderate size, may be slow for very
+#' large fisheries.
+#'
+#' @param df A dataframe (see column requirements above, by `type`).
+#' @param type Character; "CE" or "LF".
+#' @param year_window Numeric; CE only, +/- years defining the time window.
+#' @param radius_km Numeric; CE only, spatial radius in km.
+#' @param month_window Numeric; LF only, +/- months defining the time
+#'   window.
+#' @param k Numeric; number of (scaled) MADs defining the outlier
+#'   threshold, both types.
+#' @param mad_scale Numeric; MAD-to-SD scaling constant. Default 1.4826
+#'   (standard constant for consistency with a normal distribution).
+#'
+#' @return A dataframe: for "CE", `df` with `newvalue`, `n_points`, `mad`,
+#'   `adjusted_E`, `is_adjusted` columns added (no rows removed). For "LF",
+#'   `df` (at region x date x len resolution) with outlier region/date
+#'   combinations removed.
+#'
+#' @family hampel filter
+#' @export
+apply_hampel <- function(df, type, year_window = NULL, radius_km = NULL,
+						 month_window = NULL, k, mad_scale = 1.4826) {
+
+	type <- match.arg(type, c("CE", "LF"))
+
+	if (type == "CE") {
+		.check_cols_exist(df, c("f", "yr", "mm", "lat", "lon", "E", "C", "CPUE"), "apply_hampel")
+		if (is.null(year_window) || is.null(radius_km)) {
+			stop("apply_hampel: year_window and radius_km are required when type = 'CE'", call. = FALSE)
+		}
+	} else {
+		.check_cols_exist(df, c("f", "yr", "mm", "lon_from", "lon_to", "lat_from", "lat_to", "len", "freq"),
+						  "apply_hampel")
+		if (is.null(month_window)) {
+			stop("apply_hampel: month_window is required when type = 'LF'", call. = FALSE)
+		}
+	}
+
+	fisheries <- sort(unique(df$f))
+	res_list <- vector("list", length(fisheries))
+
+	for (i in seq_along(fisheries)) {
+		ifish <- fisheries[i]
+		cat(sprintf("Hampel filter for fishery %s...\n", ifish))
+
+		if (type == "CE") {
+			subset_f <- df %>%
+				filter(f == ifish) %>%
+				mutate(date = make_date(yr, mm, "15"))
+
+			data_CPUE_null <- subset_f %>% filter(CPUE == 0)
+			data_CPUEpos <- subset_f %>% filter(CPUE > 0)
+
+			hampel_filtered_CE <- hampel_CE_batch(
+				data_CPUEpos,
+				year_window = year_window, radius_km = radius_km,
+				k = k, mad_scale = mad_scale
+			) %>%
+				mutate(
+					adjusted_E = case_when(
+						CPUE == 0 ~ E,
+						newvalue != CPUE ~ C / newvalue,
+						TRUE ~ E
+					),
+					is_adjusted = E != adjusted_E
+				)
+
+			result <- data_CPUE_null %>%
+				mutate(newvalue = NA, n_points = NA, mad = NA, adjusted_E = E, is_adjusted = FALSE) %>%
+				bind_rows(hampel_filtered_CE)
+
+			n_pos <- sum(result$CPUE > 0)
+			n_adj <- sum(result$is_adjusted)
+			cat("Summary:\n")
+			cat(sprintf("Total points: %s\n", nrow(result)))
+			cat(sprintf("Points with non-zero CPUE: %s\n", n_pos))
+			cat(sprintf("Points adjusted: %s\n", n_adj))
+			cat(sprintf("Percentage adjusted: %s%%\n\n", round(100 * n_adj / n_pos, 2)))
+
+		} else {
+			data <- df %>%
+				filter(f == ifish) %>%
+				mutate(date = make_date(yr, mm, "15")) %>%
+				arrange(lon_from, lon_to, lat_from, lat_to) %>%
+				group_by(lon_from, lon_to, lat_from, lat_to) %>%
+				mutate(region = cur_group_id()) %>%
+				ungroup()
+
+			ref_data <- data %>%
+				group_by(region, date) %>%
+				mutate(len = as.numeric(as.character(len))) %>%
+				summarise(mean_len = sum(freq * len) / sum(freq), .groups = "drop") %>%
+				drop_na(mean_len)
+
+			outlier_hampel_LF <- ref_data %>%
+				mutate(hampel_results = pmap(
+					list(date, region, mean_len),
+					month_window = month_window, k = k, mad_scale = mad_scale,
+					ref_data = ref_data, what = "mean_len",
+					.f = hampel_LF, .progress = "Hampel filter for LF"
+				)) %>%
+				unnest_wider(hampel_results, names_sep = "-") %>%
+				rename_with(~ gsub("hampel_results-", "", .x))
+
+			joined <- data %>%
+				left_join(outlier_hampel_LF %>% dplyr::select(region, date, outlier), by = c("region", "date"))
+			n_outlier_rows <- sum(joined$outlier, na.rm = TRUE)
+			result <- joined %>% filter(!outlier)
+
+			cat("Summary:\n")
+			cat(sprintf("Total points (region x date x len): %s\n", nrow(result)))
+			cat(sprintf("Total unique points (region x date): %s\n", nrow(ref_data)))
+			cat(sprintf("Unique outlier points: %s\n", sum(outlier_hampel_LF$outlier)))
+			cat(sprintf("Total outlier points (rows): %s\n", n_outlier_rows))
+			cat(sprintf("Percentage outlier discarded: %s%%\n\n",
+						round(100 * n_outlier_rows / (nrow(result) + n_outlier_rows), 2)))
+		}
+
+		res_list[[i]] <- result
+	}
+
+	bind_rows(res_list)
+}

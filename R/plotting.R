@@ -1,7 +1,4 @@
-#' @importFrom ggplot2 theme_bw theme element_text element_blank unit
-#' @importFrom ggplot2 geom_polygon aes scale_x_continuous scale_y_continuous
-#' @importFrom ggplot2 map_data
-#' @importFrom dplyr mutate
+#' @import ggplot2
 NULL
 
 #' Custom ggplot2 theme for fisheries maps and plots

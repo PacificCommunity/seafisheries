@@ -18,7 +18,9 @@ Imports:
     factoextra,
     cluster,
     lubridate,
-    tictoc
+    tictoc,
+    purrr,
+    tidyr
 Suggests:
     knitr,
     rmarkdown,
