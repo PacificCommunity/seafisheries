@@ -96,6 +96,7 @@ details on failure categories.
 
 Other coordinate utilities:
 \code{\link[=convert_coordinate]{convert_coordinate()}},
-\code{\link[=roundTo.5]{roundTo.5()}}
+\code{\link[=roundTo.5]{roundTo.5()}},
+\code{\link[=roundTo2.5]{roundTo2.5()}}
 }
 \concept{coordinate utilities}

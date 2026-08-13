@@ -108,6 +108,7 @@ dataframe columns with failure reporting.
 
 Other coordinate utilities:
 \code{\link[=convert_coordinates_df]{convert_coordinates_df()}},
-\code{\link[=roundTo.5]{roundTo.5()}}
+\code{\link[=roundTo.5]{roundTo.5()}},
+\code{\link[=roundTo2.5]{roundTo2.5()}}
 }
 \concept{coordinate utilities}

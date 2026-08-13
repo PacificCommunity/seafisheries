@@ -496,6 +496,37 @@ roundTo.5 <- function(x){
 	floor(x) + 0.5
 }
 
+#' Round coordinate to nearest 5-degree grid cell center
+#'
+#' Maps a decimal degree coordinate to the center of its containing 5x5 degree
+#' SEAPODYM grid cell. Grid cells are centered at X2.5 or X7.5 (e.g., 2.5, 7.5,
+#' 12.5, 17.5, -2.5, -7.5), so any value in a given 5-degree band maps to the
+#' center of that band.
+#'
+#' @param x Numeric value or vector (latitude or longitude in decimal degrees).
+#'
+#' @return Numeric vector of the same length as `x`, with each value equal to
+#'   `floor(x/5)*5 + 2.5`.
+#'
+#' @examples
+#' roundTo2.5(3.7)    # 2.5
+#' roundTo2.5(7.2)    # 7.5
+#' roundTo2.5(-3)     # -2.5
+#' roundTo2.5(-7)     # -7.5
+#'
+#' @family coordinate utilities
+#' @export
+roundTo2.5 <- function(x){
+	rounded <- numeric(length(x))
+	for (i in seq_along(x)) {
+		if (x[i] %% 10 < 5) {
+			rounded[i] <- floor(x[i]/10) * 10 + 2.5
+		} else {
+			rounded[i] <- floor(x[i]/10) * 10 + 7.5
+		}
+	}
+	return(rounded)
+}
 
 #' Check that required columns exist in a dataframe
 #'
@@ -1187,6 +1218,89 @@ school_type_lookup <- data.frame(
 	),
 	stringsAsFactors = FALSE
 )
+
+#' Standardize length measurement codes to Upper Jaw to Caudal Fork (UF)
+#'
+#' Converts SD/US and PS-coded lengths to UF using the allometric conversions
+#' from the "Project 90 update" (US treated as equivalent to SD). UF values
+#' are left unchanged. Codes outside c("UF","SD","US","PS") are left as-is --
+#' run `infer_len_code_from_trip()` first to recover some of those from trip
+#' context, and `filter_valid_categories()` afterwards to drop what's left.
+#'
+#' @param df A dataframe.
+#' @param len_col Character; name of the length column. Default "len".
+#' @param code_col Character; name of the length-code column. Default "len_code".
+#'
+#' @return `df` with `len_col` converted to UF-equivalent lengths and
+#'   `code_col` set to "UF" for rows that were converted.
+#'
+#' @family cleaning steps
+#' @export
+standardize_length_code <- function(df, len_col = "len", code_col = "len_code") {
+	.check_cols_exist(df, c(len_col, code_col), "standardize_length_code")
+
+	sd_us <- df[[code_col]] %in% c("SD", "US")
+	ps <- df[[code_col]] %in% "PS"
+
+	df[[len_col]][sd_us] <- 3.951 * as.numeric(df[[len_col]][sd_us])^0.8369
+	df[[len_col]][ps] <- 11.385 * as.numeric(df[[len_col]][ps])^0.6619
+	df[[code_col]][sd_us | ps] <- "UF"
+
+	n_conv <- sum(sd_us) + sum(ps)
+	if (n_conv > 0) {
+		cat(n_conv, " lengths converted to UF (", sum(sd_us), " SD/US, ", sum(ps), " PS): ",
+			round(n_conv / nrow(df) * 100, 2), "% of data\n", sep = "")
+	}
+	df
+}
+
+#' Infer missing/invalid length codes from trip context
+#'
+#' For rows whose `code_col` isn't in `valid_codes`, checks whether the other
+#' rows sharing the same `id_col` agree on a single valid code -- if so,
+#' applies it. Rows with no consistent code among trip-mates are left
+#' unchanged (to be dropped later, e.g. via `filter_valid_categories()`).
+#'
+#' @param df A dataframe.
+#' @param id_col Character; name of the trip/sample identifier column. Default "id".
+#' @param code_col Character; name of the length-code column. Default "len_code".
+#' @param valid_codes Character vector of codes considered valid.
+#'   Default c("UF","SD","PS","US").
+#'
+#' @return `df` with `code_col` recovered where possible.
+#'
+#' @family cleaning steps
+#' @export
+infer_len_code_from_trip <- function(df, id_col = "id", code_col = "len_code",
+									 valid_codes = c("UF", "SD", "PS", "US")) {
+	.check_cols_exist(df, c(id_col, code_col), "infer_len_code_from_trip")
+
+	is_invalid <- !(df[[code_col]] %in% valid_codes)
+	n_invalid <- sum(is_invalid)
+	if (n_invalid == 0) return(df)
+
+	affected_ids <- unique(df[[id_col]][is_invalid])
+
+	trip_codes <- df %>%
+		filter(.data[[id_col]] %in% affected_ids, .data[[code_col]] %in% valid_codes) %>%
+		distinct(.data[[id_col]], .data[[code_col]]) %>%
+		group_by(.data[[id_col]]) %>%
+		filter(n() == 1) %>%  # trip has exactly one agreed-upon valid code
+		ungroup()
+	names(trip_codes) <- c(id_col, "inferred_code")
+
+	df <- df %>%
+		left_join(trip_codes, by = id_col) %>%
+		mutate(!!code_col := ifelse(!(.data[[code_col]] %in% valid_codes) & !is.na(inferred_code),
+									inferred_code, .data[[code_col]])) %>%
+		select(-inferred_code)
+
+	n_recovered <- n_invalid - sum(!(df[[code_col]] %in% valid_codes))
+	cat(n_recovered, " of ", n_invalid, " rows with invalid '", code_col, "' recovered from trip context (",
+		round(n_recovered / n_invalid * 100, 2), "% of invalid rows)\n", sep = "")
+	df
+}
+
 
 #' Great-circle distance between two points
 #'

@@ -34,6 +34,7 @@ Other cleaning steps:
 \code{\link[=fill_missing_month]{fill_missing_month()}},
 \code{\link[=filter_bounding_box]{filter_bounding_box()}},
 \code{\link[=filter_valid_categories]{filter_valid_categories()}},
+\code{\link[=infer_len_code_from_trip]{infer_len_code_from_trip()}},
 \code{\link[=process_catch_data]{process_catch_data()}},
 \code{\link[=process_lf_data]{process_lf_data()}},
 \code{\link[=remove_dummy_fisheries]{remove_dummy_fisheries()}},
@@ -42,6 +43,7 @@ Other cleaning steps:
 \code{\link[=remove_outliers_sd]{remove_outliers_sd()}},
 \code{\link[=remove_sparse_lf_samples]{remove_sparse_lf_samples()}},
 \code{\link[=remove_zero_fisheries]{remove_zero_fisheries()}},
+\code{\link[=standardize_length_code]{standardize_length_code()}},
 \code{\link[=treat_hbf]{treat_hbf()}},
 \code{\link[=treat_school]{treat_school()}},
 \code{\link[=trim_vesselname]{trim_vesselname()}}

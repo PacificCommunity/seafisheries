@@ -28,6 +28,7 @@ roundTo.5(-1.7)   # -1.5
 \seealso{
 Other coordinate utilities:
 \code{\link[=convert_coordinate]{convert_coordinate()}},
-\code{\link[=convert_coordinates_df]{convert_coordinates_df()}}
+\code{\link[=convert_coordinates_df]{convert_coordinates_df()}},
+\code{\link[=roundTo2.5]{roundTo2.5()}}
 }
 \concept{coordinate utilities}
