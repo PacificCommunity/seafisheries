@@ -1331,51 +1331,75 @@ calculate_distance <- function(lat1, lon1, lat2, lon2) {
 	R * c
 }
 
-#' Hampel filter for a single length-frequency mean-length observation
+#' Hampel filter for length-frequency mean-length observations, applied per region
 #'
-#' Internal worker for [apply_hampel()], called once per (region, date) via
-#' `pmap()`. Flags `value` (mean length) as an outlier if it's more than
-#' `k` scaled-MADs from the median of same-region values within
-#' `month_window` months, in `ref_data`. Same self-inclusion note as
-#' [hampel_CE_batch()]: `ref_data` includes the observation itself.
+#' For each region x date observation, compares its `what` value against the
+#' median/MAD of same-region values within `month_window` months of it,
+#' among the rows in `df`, and flags it as an outlier if it exceeds
+#' `median + k * (mad_scale-weighted MAD)`. Only rows with at least 3
+#' reference points (same region, within the time window) get a computed
+#' flag; others pass through unchanged with `n_points`/`mad` left NA. Rows
+#' with `what <= 0` are skipped (never flagged, `n_points`/`mad` left NA),
+#' matching the original per-row behavior.
 #'
-#' @param date_ Date; date of the observation.
-#' @param reg Integer/character; region identifier.
-#' @param value Numeric; mean length value being tested.
+#' Precomputes the region subset once per unique `region` in `df`, then
+#' reuses that (much smaller) subset for every date query within that
+#' region -- same precompute-once-per-group pattern as
+#' [hampel_CE_batch()], replacing what was previously a per-row
+#' `dplyr::filter()` rescan of the full `ref_data` table. Same
+#' self-inclusion note as [hampel_CE_batch()]: the reference subset
+#' includes the observation itself.
+#'
+#' @param df A dataframe with columns `region`, `date`, and whatever `what`
+#'   names (same as `ref_data` inside [apply_hampel()]).
 #' @param month_window Numeric; +/- months defining the time window.
 #' @param k Numeric; number of (scaled) MADs defining the outlier threshold.
-#' @param mad_scale Numeric; MAD-to-SD scaling constant.
-#' @param ref_data A dataframe with columns `date`, `region`, and whatever
-#'   `what` names.
-#' @param what Character; name of the column in `ref_data` to compare
-#'   `value` against. Default "mean_len".
+#' @param mad_scale Numeric; MAD-to-SD scaling constant. Default 1.4826
+#'   (standard constant for consistency with a normal distribution).
+#' @param what Character; name of the column in `df` to test for outliers.
+#'   Default "mean_len".
 #'
-#' @return A list with `outlier` (logical), `n_points` (reference points
-#'   found), and `mad` (scaled MAD used).
+#' @return `df` with `outlier` (logical), `n_points` (reference points
+#'   found), and `mad` (scaled MAD used) columns added.
 #'
 #' @family hampel filter
 #' @export
-hampel_LF <- function(date_, reg, value, month_window, k, mad_scale, ref_data, what = "mean_len") {
-	mad_value <- NA_real_
-	outlier <- FALSE
-	n_points <- NA_integer_
+hampel_LF_batch <- function(df, month_window, k, mad_scale = 1.4826, what = "mean_len") {
+	.check_cols_exist(df, c("region", "date", what), "hampel_LF_batch")
 
-	if (value > 0) {
-		values <- ref_data %>%
-			filter(date >= (date_ - months(month_window)),
-				   date <= (date_ + months(month_window)),
-				   region == reg) %>%
-			pull(.data[[what]])
-		n_points <- length(values)
+	value_vec <- df[[what]]
 
-		if (n_points >= 3) {
-			med <- median(values, na.rm = TRUE)
-			mad_value <- mad_scale * median(abs(values - med), na.rm = TRUE)
-			outlier <- abs(value - med) > (k * mad_value)
+	outlier  <- rep(FALSE, nrow(df))
+	n_points <- rep(NA_integer_, nrow(df))
+	mad_out  <- rep(NA_real_, nrow(df))
+
+	for (reg in unique(df$region)) {
+		reg_idx   <- which(df$region == reg)
+		reg_date  <- df$date[reg_idx]
+		reg_value <- value_vec[reg_idx]
+
+		for (i in seq_along(reg_idx)) {
+			qi <- reg_idx[i]
+			if (value_vec[qi] <= 0) next
+
+			within_vals <- reg_value[reg_date >= (reg_date[i] - months(month_window)) &
+									 	reg_date <= (reg_date[i] + months(month_window))]
+
+			np <- length(within_vals)
+			n_points[qi] <- np
+			if (np >= 3) {
+				med <- median(within_vals, na.rm = TRUE)
+				mad_value <- mad_scale * median(abs(within_vals - med), na.rm = TRUE)
+				mad_out[qi] <- mad_value
+				outlier[qi] <- abs(value_vec[qi] - med) > (k * mad_value)
+			}
 		}
 	}
 
-	list(outlier = outlier, n_points = n_points, mad = mad_value)
+	df$outlier <- outlier
+	df$n_points <- n_points
+	df$mad <- mad_out
+	df
 }
 
 #' Hampel filter for catch/effort CPUE, applied per fishery
@@ -1454,7 +1478,7 @@ hampel_CE_batch <- function(df, year_window, radius_km, k, mad_scale = 1.4826) {
 #' Apply a Hampel filter per fishery, for catch/effort or length-frequency data
 #'
 #' Loops over each fishery (`f`) in `df` and runs [hampel_CE_batch()] (for
-#' `type = "CE"`) or [hampel_LF()] row-by-row via `pmap()` (for
+#' `type = "CE"`) or [hampel_LF_batch()] (for
 #' `type = "LF"`), printing a running summary per fishery as it goes.
 #'
 #' `type = "CE"` expects `df` to have `f`, `yr`, `mm`, `lat`, `lon`, `E`,
@@ -1465,7 +1489,7 @@ hampel_CE_batch <- function(df, year_window, radius_km, k, mad_scale = 1.4826) {
 #' disagree.
 #'
 #' `type = "LF"` expects `df` to have `f`, `yr`, `mm`, `lon_from`, `lon_to`,
-#' `lat_from`, `lat_to`, `len`, `freq`.
+#' `lat_from`, `lat_to`, `len`, `count`.
 #'
 #' Performance note: each row/group independently re-filters and re-scans
 #' `ref_data`, giving O(n) work per row and O(n^2) overall per fishery.
@@ -1501,7 +1525,7 @@ apply_hampel <- function(df, type, year_window = NULL, radius_km = NULL,
 			stop("apply_hampel: year_window and radius_km are required when type = 'CE'", call. = FALSE)
 		}
 	} else {
-		.check_cols_exist(df, c("f", "yr", "mm", "lon_from", "lon_to", "lat_from", "lat_to", "len", "freq"),
+		.check_cols_exist(df, c("f", "yr", "mm", "lon_from", "lon_to", "lat_from", "lat_to", "len", "count"),
 						  "apply_hampel")
 		if (is.null(month_window)) {
 			stop("apply_hampel: month_window is required when type = 'LF'", call. = FALSE)
@@ -1561,17 +1585,13 @@ apply_hampel <- function(df, type, year_window = NULL, radius_km = NULL,
 			ref_data <- data %>%
 				group_by(region, date) %>%
 				mutate(len = as.numeric(as.character(len))) %>%
-				summarise(mean_len = sum(freq * len) / sum(freq), .groups = "drop") %>%
+				summarise(mean_len = sum(count * len) / sum(count), .groups = "drop") %>%
 				drop_na(mean_len)
 
-			outlier_hampel_LF <- ref_data %>%
-				mutate(hampel_results = pmap(
-					list(date, region, mean_len),
-					month_window = month_window, k = k, mad_scale = mad_scale,
-					ref_data = ref_data, what = "mean_len",
-					.f = hampel_LF, .progress = "Hampel filter for LF"
-				)) %>%
-				unnest_wider(hampel_results, names_sep = "-") %>%
+			outlier_hampel_LF <- hampel_LF_batch(
+				ref_data,
+				month_window = month_window, k = k, mad_scale = mad_scale, what = "mean_len"
+			) %>%
 				rename_with(~ gsub("hampel_results-", "", .x))
 
 			joined <- data %>%

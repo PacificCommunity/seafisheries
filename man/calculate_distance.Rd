@@ -24,6 +24,6 @@ are vectors (or vice versa), following standard R recycling.
 Other hampel filter:
 \code{\link[=apply_hampel]{apply_hampel()}},
 \code{\link[=hampel_CE_batch]{hampel_CE_batch()}},
-\code{\link[=hampel_LF]{hampel_LF()}}
+\code{\link[=hampel_LF_batch]{hampel_LF_batch()}}
 }
 \concept{hampel filter}

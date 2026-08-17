@@ -40,7 +40,7 @@ combinations removed.
 }
 \description{
 Loops over each fishery (\code{f}) in \code{df} and runs \code{\link[=hampel_CE_batch]{hampel_CE_batch()}} (for
-\code{type = "CE"}) or \code{\link[=hampel_LF]{hampel_LF()}} row-by-row via \code{pmap()} (for
+\code{type = "CE"}) or \code{\link[=hampel_LF_batch]{hampel_LF_batch()}} (for
 \code{type = "LF"}), printing a running summary per fishery as it goes.
 }
 \details{
@@ -52,7 +52,7 @@ fixed. This assumes catch is more reliable than effort when the two
 disagree.
 
 \code{type = "LF"} expects \code{df} to have \code{f}, \code{yr}, \code{mm}, \code{lon_from}, \code{lon_to},
-\code{lat_from}, \code{lat_to}, \code{len}, \code{freq}.
+\code{lat_from}, \code{lat_to}, \code{len}, \code{count}.
 
 Performance note: each row/group independently re-filters and re-scans
 \code{ref_data}, giving O(n) work per row and O(n^2) overall per fishery.
@@ -63,6 +63,6 @@ large fisheries.
 Other hampel filter:
 \code{\link[=calculate_distance]{calculate_distance()}},
 \code{\link[=hampel_CE_batch]{hampel_CE_batch()}},
-\code{\link[=hampel_LF]{hampel_LF()}}
+\code{\link[=hampel_LF_batch]{hampel_LF_batch()}}
 }
 \concept{hampel filter}

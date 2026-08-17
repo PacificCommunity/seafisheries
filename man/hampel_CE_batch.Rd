@@ -42,6 +42,6 @@ by \code{\link[=apply_hampel]{apply_hampel()}} (\code{type = "CE"}); exported so
 Other hampel filter:
 \code{\link[=apply_hampel]{apply_hampel()}},
 \code{\link[=calculate_distance]{calculate_distance()}},
-\code{\link[=hampel_LF]{hampel_LF()}}
+\code{\link[=hampel_LF_batch]{hampel_LF_batch()}}
 }
 \concept{hampel filter}
