@@ -789,7 +789,7 @@ treat_school <- function(df, school_col = "school", valid_codes = school_type_lo
 #' @export
 trim_vesselname <- function(df, vesselname_col) {
 	.check_cols_exist(df, vesselname_col, "trim_vesselname")
-	df %>% mutate(!!vesselname_col := str_trim(.data[[vesselname_col]], side = "right"))
+	df %>% mutate(!!vesselname_col := stringr::str_trim(.data[[vesselname_col]], side = "right"))
 }
 
 #' Process raw catch/effort fisheries data into cleaned form
