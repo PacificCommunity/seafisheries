@@ -150,3 +150,69 @@ coord_labels <- function() {
 		scale_x_continuous("", labels = lon_format)
 	)
 }
+
+#' Plot a gridded fisheries map
+#'
+#' Wraps map_bg(), coord_labels(), coord_fixed(), scale_fill_viridis_c(), and
+#' customTheme() into one call.
+#'
+#' Tile sizing assumes a uniform grid (fine for EC_clean's 1x1 grid). LF data
+#' isn't uniform -- cell size varies by ASTRAT (2.5 to 10 degrees) -- so a
+#' single tile_width/tile_height is only an approximation there. Facet by
+#' ASTRAT if you need visually accurate cell sizes for LF.
+#'
+#' @param df Data frame containing the data to plot.
+#' @param fill_col Character. Name of the column in `df` to map to tile fill.
+#' @param lat_col Character. Name of the latitude column. Default `"latCent"`.
+#' @param lon_col Character. Name of the longitude column. Default `"lonCent"`.
+#' @param facet_col Character or NULL. Column to facet by. Default NULL (no facetting).
+#' @param fill_label Character. Legend title for the fill scale. Defaults to `fill_col`.
+#' @param filter_positive Logical. If TRUE, drop rows where `fill_col` is NA or <= 0. Default TRUE.
+#' @param tile_width Numeric. Tile width in degrees. Default 1.
+#' @param tile_height Numeric. Tile height in degrees. Default 1.
+#'
+#' @details
+#' Requires the global objects `lon_range` and `lat_range` to be defined in
+#' the environment (used to set `coord_fixed()` limits).
+plot_fisheries_map <- function(df, fill_col, lat_col = "latCent", lon_col = "lonCent",
+							   facet_col = NULL, fill_label = fill_col,
+							   filter_positive = TRUE, tile_width = 1, tile_height = 1) {
+	if (filter_positive) {
+		keep <- !is.na(df[[fill_col]]) & df[[fill_col]] > 0
+		df <- df[keep, ]
+	}
+
+	p <- ggplot(df) +
+		geom_tile(aes(x = .data[[lon_col]], y = .data[[lat_col]], fill = .data[[fill_col]]),
+				  width = tile_width, height = tile_height) +
+		map_bg() +
+		coord_labels() +
+		coord_fixed(xlim = lon_range, ylim = lat_range) +
+		scale_fill_viridis_c(name = fill_label) +
+		customTheme()
+
+	if (!is.null(facet_col)) {
+		p <- p + facet_wrap(vars(.data[[facet_col]]))
+	}
+
+	p
+}
+
+#' Plot length-frequency density by fishery
+#'
+#' Requires `df` to contain columns `len`, `count`, and `f`, these column
+#' names are hardcoded and not configurable.
+#'
+#' @param df Data frame with columns `len` (length), `count` (frequency weight),
+#'   and `f` (fishery code to facet by).
+plot_lf_density <- function(df) {
+	ggplot(df, aes(x = len, weight = count)) +
+		geom_density(fill = "steelblue", alpha = 0.4) +
+		facet_wrap(~ f) +
+		labs(
+			x = "Length",
+			y = "Density",
+			title = paste("Length frequency by fishery")
+		) +
+		theme_minimal()
+}

@@ -1613,3 +1613,51 @@ apply_hampel <- function(df, type, year_window = NULL, radius_km = NULL,
 
 	bind_rows(res_list)
 }
+
+#' Classify coordinates into WCPFC or (non-overlapping) EPO region
+#'
+#' Points outside both areas (e.g. north of 50N in the EPO zone, or south
+#' of 60S) return NA. Where WCPFC and EPO zones overlap (lon 210-230,
+#' lat -4 to -50), the point is classified as WCPFC.
+#'
+#' @param lat Numeric vector of latitudes.
+#' @param lon Numeric vector of longitudes (0-360 convention).
+#'
+#' @return Character vector: `"WCPFC"`, `"EPO"`, or `NA` for points outside both regions.
+region_from_coords <- function(lat, lon) {
+	overlap <- lon >= 210 & lon < 230 & lat <= -4 & lat >= -50
+	wcpfc   <- lon < 210 | (lon < 230 & lat <= -4 & lat >= -60)  # includes overlap
+	epo_non_wcpfc <- lon >= 210 & lat <= 50 & lat >= -50 & !overlap
+
+	dplyr::case_when(
+		wcpfc ~ "WCPFC",
+		epo_non_wcpfc ~ "EPO",
+		TRUE ~ NA_character_
+	)
+}
+
+#' Summarise record count and a value column by WCPFC/EPO region
+#'
+#' Classifies each row via `region_from_coords()`, drops rows outside both
+#' regions, then summarises by region.
+#'
+#' @param df Data frame containing coordinate columns.
+#' @param lat_col Character. Name of the latitude column in `df`.
+#' @param lon_col Character. Name of the longitude column in `df`.
+#' @param value_col Character or NULL. Name of a numeric column to sum per
+#'   region. If NULL, `total` is `NA_real_` for every region.
+#'
+#' @return Data frame with one row per region (`"WCPFC"`, `"EPO"`),
+#'   containing `region`, `n_records`, and `total`.
+summarise_region <- function(df, lat_col, lon_col, value_col = NULL) {
+	df <- df |> mutate(region = region_from_coords(.data[[lat_col]], .data[[lon_col]]))
+
+	df |>
+		filter(!is.na(region)) |>
+		group_by(region) |>
+		summarise(
+			n_records = n(),
+			total = if (!is.null(value_col)) sum(.data[[value_col]], na.rm = TRUE) else NA_real_,
+			.groups = "drop"
+		)
+}
