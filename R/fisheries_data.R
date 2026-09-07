@@ -1288,8 +1288,8 @@ standardize_length_code <- function(df, len_col = "len", code_col = "len_code") 
 	sd_us <- df[[code_col]] %in% c("SD", "US")
 	ps <- df[[code_col]] %in% "PS"
 
-	df[[len_col]][sd_us] <- 3.951 * as.numeric(df[[len_col]][sd_us])^0.8369
-	df[[len_col]][ps] <- 11.385 * as.numeric(df[[len_col]][ps])^0.6619
+	df[[len_col]][sd_us] <- round(3.951 * as.numeric(df[[len_col]][sd_us])^0.8369)
+	df[[len_col]][ps] <- round(11.385 * as.numeric(df[[len_col]][ps])^0.6619)
 	df[[code_col]][sd_us | ps] <- "UF"
 
 	n_conv <- sum(sd_us) + sum(ps)
