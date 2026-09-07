@@ -1060,6 +1060,51 @@ remove_sparse_lf_samples <- function(df, group_cols, len_col = "len", freq_col =
 	df_out
 }
 
+#' Floor fractional length values and merge resulting duplicate bins
+#'
+#' Some source length values are non-integer (sub-cm sampling), which breaks
+#' `bin_to_1cm()`'s assumption of integer bin edges. Floors `len_col` to the
+#' nearest cm, then collapses rows that become identical on
+#' `c(group_cols, len_col)` by summing `freq_col`.
+#'
+#' @param df A dataframe.
+#' @param group_cols Character vector of columns identifying a sample.
+#' @param len_col Character; name of the length column. Default "len".
+#' @param freq_col Character; name of the frequency/count column. Default
+#'   "count".
+#'
+#' @return The dataframe with `len_col` floored and duplicate
+#'   `c(group_cols, len_col)` rows merged.
+#'
+#' @family cleaning steps
+#' @export
+floor_lf_lengths <- function(df, group_cols, len_col = "len", freq_col = "count") {
+	.check_cols_exist(df, c(group_cols, len_col, freq_col), "floor_lf_lengths")
+
+	is_frac <- df[[len_col]] != floor(df[[len_col]])
+	n_frac <- sum(is_frac, na.rm = TRUE)
+
+	if (n_frac > 0) {
+		cat(n_frac, " entries with non-integer '", len_col, "' floored (",
+			round(n_frac / nrow(df) * 100, 2), "% of data)\n", sep = "")
+		df[[len_col]] <- floor(df[[len_col]])
+	}
+
+	key_cols <- c(group_cols, len_col)
+	is_dup <- duplicated(df[key_cols]) | duplicated(df[key_cols], fromLast = TRUE)
+
+	if (!any(is_dup)) return(df)
+
+	df_merged <- df[is_dup, ] %>%
+		group_by(across(all_of(key_cols))) %>%
+		summarise(across(-all_of(freq_col), dplyr::first),
+				  !!freq_col := sum(.data[[freq_col]], na.rm = TRUE),
+				  .groups = "drop") %>%
+		select(all_of(names(df)))
+
+	dplyr::bind_rows(df[!is_dup, ], df_merged)
+}
+
 #' Disaggregate length-frequency bins to 1cm resolution
 #'
 #' Expands each row with bin size `LSTRAT > 1` into `LSTRAT` separate 1cm
@@ -1140,6 +1185,7 @@ process_lf_data <- function(df, required_cols, mm_col = "mm", qtr_col = "qtr",
 	df <- compute_grid_center(df, strat_col, strat_lookup, lon_col = lon_col, lat_col = lat_col)
 	df <- filter_bounding_box(df, lat_col = "latCent", lon_col = "lonCent",
 							  lat_range = lat_range, lon_range = lon_range)
+	df <- floor_lf_lengths(df, group_cols, len_col = len_col, freq_col = freq_col)
 	df <- remove_sparse_lf_samples(df, group_cols, len_col = len_col, freq_col = freq_col, min_bins = min_bins)
 	df
 }

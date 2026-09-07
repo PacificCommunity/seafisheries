@@ -73,6 +73,7 @@ Other cleaning steps:
 \code{\link[=fill_missing_month]{fill_missing_month()}},
 \code{\link[=filter_bounding_box]{filter_bounding_box()}},
 \code{\link[=filter_valid_categories]{filter_valid_categories()}},
+\code{\link[=floor_lf_lengths]{floor_lf_lengths()}},
 \code{\link[=infer_len_code_from_trip]{infer_len_code_from_trip()}},
 \code{\link[=process_catch_data]{process_catch_data()}},
 \code{\link[=remove_dummy_fisheries]{remove_dummy_fisheries()}},

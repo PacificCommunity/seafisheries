@@ -31,6 +31,7 @@ Other cleaning steps:
 \code{\link[=convert_school_letters]{convert_school_letters()}},
 \code{\link[=filter_bounding_box]{filter_bounding_box()}},
 \code{\link[=filter_valid_categories]{filter_valid_categories()}},
+\code{\link[=floor_lf_lengths]{floor_lf_lengths()}},
 \code{\link[=infer_len_code_from_trip]{infer_len_code_from_trip()}},
 \code{\link[=process_catch_data]{process_catch_data()}},
 \code{\link[=process_lf_data]{process_lf_data()}},
