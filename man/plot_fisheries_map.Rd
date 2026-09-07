@@ -12,6 +12,7 @@ plot_fisheries_map(
   facet_col = NULL,
   fill_label = fill_col,
   filter_positive = TRUE,
+  filter_sup_quantile = NULL,
   tile_width = 1,
   tile_height = 1
 )
@@ -30,6 +31,10 @@ plot_fisheries_map(
 \item{fill_label}{Character. Legend title for the fill scale. Defaults to \code{fill_col}.}
 
 \item{filter_positive}{Logical. If TRUE, drop rows where \code{fill_col} is NA or <= 0. Default TRUE.}
+
+\item{filter_sup_quantile}{Numeric or NULL. If not NULL, caps \code{fill_col}
+at this upper quantile (values above it are set to the quantile value)
+before plotting. Default NULL (no capping).}
 
 \item{tile_width}{Numeric. Tile width in degrees. Default 1.}
 

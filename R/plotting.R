@@ -168,6 +168,9 @@ coord_labels <- function() {
 #' @param facet_col Character or NULL. Column to facet by. Default NULL (no facetting).
 #' @param fill_label Character. Legend title for the fill scale. Defaults to `fill_col`.
 #' @param filter_positive Logical. If TRUE, drop rows where `fill_col` is NA or <= 0. Default TRUE.
+#' @param filter_sup_quantile Numeric or NULL. If not NULL, caps `fill_col`
+#'   at this upper quantile (values above it are set to the quantile value)
+#'   before plotting. Default NULL (no capping).
 #' @param tile_width Numeric. Tile width in degrees. Default 1.
 #' @param tile_height Numeric. Tile height in degrees. Default 1.
 #'
@@ -176,10 +179,16 @@ coord_labels <- function() {
 #' the environment (used to set `coord_fixed()` limits).
 plot_fisheries_map <- function(df, fill_col, lat_col = "latCent", lon_col = "lonCent",
 							   facet_col = NULL, fill_label = fill_col,
-							   filter_positive = TRUE, tile_width = 1, tile_height = 1) {
+							   filter_positive = TRUE, filter_sup_quantile = NULL,
+							   tile_width = 1, tile_height = 1) {
 	if (filter_positive) {
 		keep <- !is.na(df[[fill_col]]) & df[[fill_col]] > 0
 		df <- df[keep, ]
+	}
+
+	if (!is.null(filter_sup_quantile)) {
+		qt <- quantile(df[[fill_col]], filter_sup_quantile)
+		df[[fill_col]][df[[fill_col]]>qt] <- qt
 	}
 
 	p <- ggplot(df) +
