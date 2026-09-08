@@ -528,6 +528,42 @@ roundTo2.5 <- function(x){
 	return(rounded)
 }
 
+#' Round half away from zero
+#'
+#' Rounds a numeric vector to the nearest whole number, with ties (exact
+#' \code{.5} values) rounding away from zero. This differs from base R's
+#' \code{\link{round}}, which uses IEC 60609 "round half to even" (banker's
+#' rounding) and can round \code{.5} values inconsistently from a naive
+#' perspective (e.g. \code{round(0.5) == 0}, \code{round(1.5) == 2}).
+#'
+#' @param x A numeric vector.
+#'
+#' @return A numeric vector of the same length as \code{x}, with each element
+#'   rounded to the nearest whole number. Ties round away from zero
+#'   (\code{2.5} becomes \code{3}, \code{-2.5} becomes \code{-3}).
+#'
+#' @details
+#' Only rounds to whole numbers; there is no \code{digits} argument.
+#' Behavior at floating-point representation edges (values that should be
+#' exactly \code{.5} but are stored as e.g. \code{.4999999...} due to binary
+#' floating-point representation) has not been tested and may not always
+#' match the mathematically expected result.
+#'
+#' @family cleaning steps
+#'
+#' @examples
+#' customRound(2.5)   # 3
+#' customRound(2.4)   # 2
+#' customRound(-2.5)  # -3
+#' customRound(-2.4)  # -2
+#'
+#' @export
+customRound <- function(x) {
+	ifelse(x >= 0,
+		   ifelse(x - floor(x) >= 0.5, ceiling(x), floor(x)),
+		   ifelse(ceiling(x) - x >= 0.5, floor(x), ceiling(x)))
+}
+
 #' Check that required columns exist in a dataframe
 #'
 #' Internal helper. Stops with a message naming the missing column(s) and the
@@ -1288,14 +1324,14 @@ standardize_length_code <- function(df, len_col = "len", code_col = "len_code") 
 	sd_us <- df[[code_col]] %in% c("SD", "US")
 	ps <- df[[code_col]] %in% "PS"
 
-	df[[len_col]][sd_us] <- round(3.951 * as.numeric(df[[len_col]][sd_us])^0.8369)
-	df[[len_col]][ps] <- round(11.385 * as.numeric(df[[len_col]][ps])^0.6619)
+	df[[len_col]][sd_us] <- customRound(3.951 * as.numeric(df[[len_col]][sd_us])^0.8369)
+	df[[len_col]][ps] <- customRound(11.385 * as.numeric(df[[len_col]][ps])^0.6619)
 	df[[code_col]][sd_us | ps] <- "UF"
 
 	n_conv <- sum(sd_us) + sum(ps)
 	if (n_conv > 0) {
 		cat(n_conv, " lengths converted to UF (", sum(sd_us), " SD/US, ", sum(ps), " PS): ",
-			round(n_conv / nrow(df) * 100, 2), "% of data\n", sep = "")
+			customRound(n_conv / nrow(df) * 100, 2), "% of data\n", sep = "")
 	}
 	df
 }

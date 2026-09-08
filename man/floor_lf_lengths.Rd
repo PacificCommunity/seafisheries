@@ -32,6 +32,7 @@ Other cleaning steps:
 \code{\link[=bin_to_1cm]{bin_to_1cm()}},
 \code{\link[=compute_grid_center]{compute_grid_center()}},
 \code{\link[=convert_school_letters]{convert_school_letters()}},
+\code{\link[=customRound]{customRound()}},
 \code{\link[=fill_missing_month]{fill_missing_month()}},
 \code{\link[=filter_bounding_box]{filter_bounding_box()}},
 \code{\link[=filter_valid_categories]{filter_valid_categories()}},
