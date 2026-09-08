@@ -1331,7 +1331,7 @@ standardize_length_code <- function(df, len_col = "len", code_col = "len_code") 
 	n_conv <- sum(sd_us) + sum(ps)
 	if (n_conv > 0) {
 		cat(n_conv, " lengths converted to UF (", sum(sd_us), " SD/US, ", sum(ps), " PS): ",
-			customRound(n_conv / nrow(df) * 100, 2), "% of data\n", sep = "")
+			round(n_conv / nrow(df) * 100, 2), "% of data\n", sep = "")
 	}
 	df
 }
