@@ -17,8 +17,13 @@ The filtered dataframe.
 }
 \description{
 Wraps \code{\link[=is_valid]{is_valid()}} over a set of required columns and drops any row where
-at least one of them is NA, NaN, Inf, or NULL. Logs the removal via
-\code{\link[=report_removal]{report_removal()}}.
+at least one of them is NA, NaN, Inf, or NULL. Prints a per-column
+breakdown of where the invalid values came from (counts are incidence,
+not a partition, a row failing two required columns is counted under
+both), then logs the total removal via \code{\link[=report_removal]{report_removal()}}. Also checks
+every other column still present in \code{df} for invalid values and warns
+(without removing anything), plus a total count of rows left with
+invalid values outside \code{required_cols}.
 }
 \seealso{
 Other cleaning steps:

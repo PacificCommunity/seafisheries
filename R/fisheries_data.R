@@ -586,11 +586,44 @@ customRound <- function(x) {
 	invisible(NULL)
 }
 
+#' Print per-column invalid-value diagnostics
+#'
+#' Internal helper. For each column in `cols`, counts values failing
+#' [is_valid()] and, if any are found, prints one line with the count and
+#' its percentage of `n_total`. Silent for columns with zero invalid values.
+#'
+#' @param df A dataframe.
+#' @param cols Character vector of column names to check.
+#' @param n_total Integer; denominator for the percentage (size of df at
+#'   the start of the calling function, before any removal).
+#' @param header Character; line printed once before the per-column detail,
+#'   only if at least one column has invalid values.
+#'
+#' @return Invisibly returns NULL. Called for its side effect.
+#' @keywords internal
+.report_col_invalid_counts <- function(df, cols, n_total, header) {
+	counts <- sapply(cols, function(col) sum(!is_valid(df[[col]])))
+	counts <- counts[counts > 0]
+	if (length(counts) > 0) {
+		cat(header, "\n", sep = "")
+		for (col in names(counts)) {
+			n <- counts[[col]]
+			cat("  ", col, ": ", n, " (", round(n / n_total * 100, 2), "% of data)\n", sep = "")
+		}
+	}
+	invisible(NULL)
+}
+
 #' Remove rows with invalid values in required columns
 #'
 #' Wraps [is_valid()] over a set of required columns and drops any row where
-#' at least one of them is NA, NaN, Inf, or NULL. Logs the removal via
-#' [report_removal()].
+#' at least one of them is NA, NaN, Inf, or NULL. Prints a per-column
+#' breakdown of where the invalid values came from (counts are incidence,
+#' not a partition, a row failing two required columns is counted under
+#' both), then logs the total removal via [report_removal()]. Also checks
+#' every other column still present in `df` for invalid values and warns
+#' (without removing anything), plus a total count of rows left with
+#' invalid values outside `required_cols`.
 #'
 #' @param df A dataframe.
 #' @param required_cols Character vector of column names that must all be
@@ -603,8 +636,25 @@ customRound <- function(x) {
 remove_invalid <- function(df, required_cols) {
 	.check_cols_exist(df, required_cols, "remove_invalid")
 	n0 <- nrow(df)
+
+	.report_col_invalid_counts(df, required_cols, n0,
+							   "Invalid values (NA/NaN/Inf) by required column:")
+
 	df_out <- df %>% filter(if_all(all_of(required_cols), is_valid))
 	report_removal(n0 - nrow(df_out), n0, "invalid values (NA/NaN/Inf) in required columns")
+
+	other_cols <- setdiff(names(df_out), required_cols)
+	if (length(other_cols) > 0) {
+		.report_col_invalid_counts(df_out, other_cols, n0,
+								   "Invalid values (NA/NaN/Inf) remaining in other columns (not removed):")
+
+		n_rows_bad_other <- df_out %>% filter(!if_all(all_of(other_cols), is_valid)) %>% nrow()
+		if (n_rows_bad_other > 0) {
+			cat(n_rows_bad_other, " rows remain with invalid values in non-required columns: ",
+				round(n_rows_bad_other / n0 * 100, 2), "% of data\n", sep = "")
+		}
+	}
+
 	df_out
 }
 
