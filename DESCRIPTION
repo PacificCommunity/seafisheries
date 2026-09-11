@@ -15,8 +15,6 @@ Imports:
     stringr,
     ggplot2,
     maps,
-    factoextra,
-    cluster,
     lubridate,
     tictoc,
     purrr,
