@@ -145,13 +145,11 @@ convert_coordinate <- function(coord, warnings = TRUE, cardinal = "latitude", fo
 				coord_clean <- sub("^-", "", coord_clean)
 			}
 		} else {
-			direction <- NULL
+			direction <- if(is_negative) "W" else "E"
+			if(is_negative) {
+				coord_clean <- sub("^-", "", coord_clean)
+			}
 		}
-	}
-
-	# Handle potential numeric input
-	if(is.numeric(coord_clean)) {
-		coord_clean <- as.character(coord_clean)
 	}
 
 	# Check for multiple decimal points
@@ -247,7 +245,6 @@ convert_coordinate <- function(coord, warnings = TRUE, cardinal = "latitude", fo
 
 	return(return_result(decimal_degrees, NA_character_))
 }
-
 
 #' Convert Coordinate Columns in a Dataframe
 #'
