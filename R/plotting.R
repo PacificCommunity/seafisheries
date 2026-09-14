@@ -180,7 +180,7 @@ coord_labels <- function() {
 plot_fisheries_map <- function(df, fill_col, lat_col = "latCent", lon_col = "lonCent",
 							   facet_col = NULL, fill_label = fill_col,
 							   filter_positive = TRUE, filter_sup_quantile = NULL,
-							   tile_width = 1, tile_height = 1) {
+							   tile_width = 1, tile_height = 1, title=NULL) {
 	if (filter_positive) {
 		keep <- !is.na(df[[fill_col]]) & df[[fill_col]] > 0
 		df <- df[keep, ]
@@ -198,6 +198,7 @@ plot_fisheries_map <- function(df, fill_col, lat_col = "latCent", lon_col = "lon
 		coord_labels() +
 		coord_fixed(xlim = lon_range, ylim = lat_range) +
 		scale_fill_viridis_c(name = fill_label) +
+		labs(title=title) +
 		customTheme()
 
 	if (!is.null(facet_col)) {
