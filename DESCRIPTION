@@ -18,7 +18,8 @@ Imports:
     lubridate,
     tictoc,
     purrr,
-    tidyr
+    tidyr,
+    scales
 Suggests:
     knitr,
     rmarkdown,

@@ -772,38 +772,57 @@ apply_pacific_mask <- function(df, lat_col, lon_col, pmask_lookup) {
 
 #' Flag and clean Hooks Between Floats (HBF) values
 #'
-#' Longline-specific. Flags HBF values above `threshold` as outliers without
-#' removing rows (adds a logical `hbf_outlier` column), and converts
-#' non-positive HBF values to NA.
+#' Longline-specific. Converts HBF values outside the plausible range (
+#' non-positive, or above `threshold`) to NA, and adds a factor column
+#' `hbf_outlier` recording *why* each row was flagged. Values are not
+#' imputed or otherwise corrected: only `hbf_col` is blanked, rows are
+#' kept, so other catch/effort fields on the same row stay usable and
+#' downstream analyses needing `hbf` handle the missingness explicitly.
 #'
 #' @param df A dataframe.
 #' @param hbf_col Character; name of the HBF column. Default "hbf".
-#' @param threshold Numeric; HBF values above this are flagged as outliers.
-#'   Default 50.
+#' @param threshold Numeric; HBF values above this are treated as
+#'   implausible and set to NA. Default 55m set empirically:
+#'   Check with [plot_hbf_histogram()], faceted by vessel, against new
+#'   data periodically, a fixed ceiling can eventually clip a genuinely
+#'   new deep-set fleet practice.
 #'
-#' @return The dataframe with `hbf_col` <= 0 converted to NA and a new
-#'   logical column `hbf_outlier`.
+#' @return `df` with `hbf_col` values <= 0 or > `threshold` converted to
+#'   NA, and a factor column `hbf_outlier` with levels `"valid"`,
+#'   `"missing"`, `"non_positive"`, `"above_threshold"`. `"missing"` marks
+#'   rows where `hbf_col` was already NA on input -- distinct from
+#'   `"valid"`, which means a value was recorded and is plausible.
 #'
 #' @family cleaning steps
 #' @export
-treat_hbf <- function(df, hbf_col = "hbf", threshold = 50) {
+treat_hbf <- function(df, hbf_col = "hbf", threshold = 55) {
 	.check_cols_exist(df, hbf_col, "treat_hbf")
 
-	n_gt <- sum(df[[hbf_col]] > threshold, na.rm = TRUE)
-	n_le0 <- sum(df[[hbf_col]] <= 0, na.rm = TRUE)
+	df <- df %>%
+		mutate(hbf_outlier = dplyr::case_when(
+			is.na(.data[[hbf_col]])      ~ "missing",
+			.data[[hbf_col]] <= 0        ~ "non_positive",
+			.data[[hbf_col]] > threshold ~ "above_threshold",
+			TRUE                         ~ "valid"
+		))
+	df[["hbf_outlier"]] <- factor(
+		df[["hbf_outlier"]],
+		levels = c("valid", "missing", "non_positive", "above_threshold")
+	)
 
-	df <- df %>% mutate(hbf_outlier = .data[[hbf_col]] > threshold)
+	n_nonpos <- sum(df[["hbf_outlier"]] == "non_positive")
+	n_above  <- sum(df[["hbf_outlier"]] == "above_threshold")
 
-	if (n_gt > 0) {
-		cat(n_gt, " entries flagged with", hbf_col, ">", threshold, "(",
-			round(n_gt / nrow(df) * 100, 2), "% of data)\n")
+	df[[hbf_col]] <- ifelse(df[["hbf_outlier"]] %in% c("non_positive", "above_threshold"),
+							NA, df[[hbf_col]])
+
+	if (n_nonpos > 0) {
+		cat(n_nonpos, " entries with", hbf_col, "<= 0 converted to NA (",
+			round(n_nonpos / nrow(df) * 100, 2), "% of data)\n")
 	}
-
-	df[[hbf_col]] <- ifelse(df[[hbf_col]] <= 0, NA, df[[hbf_col]])
-
-	if (n_le0 > 0) {
-		cat(n_le0, " entries with", hbf_col, "<= 0 converted to NA (",
-			round(n_le0 / nrow(df) * 100, 2), "% of data)\n")
+	if (n_above > 0) {
+		cat(n_above, " entries with", hbf_col, ">", threshold, "converted to NA (",
+			round(n_above / nrow(df) * 100, 2), "% of data)\n")
 	}
 
 	df

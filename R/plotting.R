@@ -231,3 +231,70 @@ plot_lf_density <- function(df) {
 		) +
 		theme_minimal()
 }
+
+
+#' Plot a histogram of hooks-between-floats (HBF) values
+#'
+#' Longline-specific diagnostic plot, not part of the cleaning pipeline
+#' itself. Used to choose a `threshold` for [treat_hbf()] by inspection: the
+#' goal is to find a genuine gap in the distribution between plausible
+#' fleet-level HBF values and implausible ones, rather than picking a
+#' ceiling first and checking it afterwards.
+#'
+#' @param df A dataframe.
+#' @param hbf_col Character; name of the HBF column. Default "hbf".
+#' @param xlim Numeric vector of length 2, or NULL; x-axis zoom range (e.g.
+#'   `c(40, 150)` to inspect the upper tail in isolation). Default NULL
+#'   (full range).
+#' @param binwidth Numeric; histogram bin width. Default 1 -- HBF is
+#'   effectively an integer hook count per basket.
+#' @param log_y Logical; if TRUE (default), the y-axis uses a pseudo-log10
+#'   scale so single-record bars in the sparse tail stay visible next to the
+#'   dense low-HBF body. A linear count axis flattens the tail to invisible
+#'   at this data's scale. Set FALSE for a plain linear axis.
+#' @param candidate_ceilings Numeric vector or NULL; draws a dashed vertical
+#'   reference line at each value, for comparing candidate thresholds
+#'   directly against the distribution. Default NULL.
+#' @param facet_col Character or NULL; optional column (e.g. `"flag"` or
+#'   `"vesselname"`) to facet by. Use this to check whether tail values are
+#'   a consistent, repeated feature of a given vessel/fleet (real gear) or
+#'   isolated one-off spikes (likely errors) -- the distinction the global
+#'   histogram alone can't make. Default NULL (no facetting).
+#'
+#' @return A ggplot2 object.
+#'
+#' @family plotting utilities
+#' @export
+plot_hbf_histogram <- function(df, hbf_col = "hbf", xlim = NULL, binwidth = 1,
+							   log_y = TRUE, candidate_ceilings = NULL,
+							   facet_col = NULL) {
+	.check_cols_exist(df, hbf_col, "plot_hbf_histogram")
+	if (!is.null(facet_col)) .check_cols_exist(df, facet_col, "plot_hbf_histogram")
+
+	p <- ggplot(df, aes(x = .data[[hbf_col]])) +
+		geom_histogram(binwidth = binwidth, fill = "steelblue",
+					   colour = NA, boundary = 0) +
+		labs(x = "Hooks between floats (HBF)",
+			 y = if (log_y) "Count (pseudo-log scale)" else "Count",
+			 title = "HBF distribution") +
+		customTheme()
+
+	if (!is.null(xlim)) {
+		p <- p + coord_cartesian(xlim = xlim)
+	}
+
+	if (log_y) {
+		p <- p + scale_y_continuous(trans = scales::pseudo_log_trans(base = 10))
+	}
+
+	if (!is.null(candidate_ceilings)) {
+		p <- p + geom_vline(xintercept = candidate_ceilings,
+							linetype = "dashed", colour = "firebrick")
+	}
+
+	if (!is.null(facet_col)) {
+		p <- p + facet_wrap(vars(.data[[facet_col]]), scales = "free_y")
+	}
+
+	p
+}
