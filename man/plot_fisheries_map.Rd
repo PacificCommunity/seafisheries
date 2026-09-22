@@ -14,7 +14,8 @@ plot_fisheries_map(
   filter_positive = TRUE,
   filter_sup_quantile = NULL,
   tile_width = 1,
-  tile_height = 1
+  tile_height = 1,
+  title = NULL
 )
 }
 \arguments{

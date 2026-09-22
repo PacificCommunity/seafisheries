@@ -12,24 +12,21 @@ treat_hbf(df, hbf_col = "hbf", threshold = 55)
 \item{hbf_col}{Character; name of the HBF column. Default "hbf".}
 
 \item{threshold}{Numeric; HBF values above this are treated as
-implausible and set to NA. Default 55 -- set empirically: values up
-to ~52 form a fleet-consistent cluster (repeated by the same vessel),
-while values from 60 upward are scattered across unrelated
-vessels/flags with no repetition, consistent with data-entry error.
-Re-check with \code{\link[=plot_hbf_histogram]{plot_hbf_histogram()}}, faceted by vessel, against new
-data periodically -- a fixed ceiling can eventually clip a genuinely
-new deep-set fleet practice, the same failure mode this replaced.}
+implausible and set to NA. Default 55m set empirically:
+Check with \code{\link[=plot_hbf_histogram]{plot_hbf_histogram()}}, faceted by vessel, against new
+data periodically, a fixed ceiling can eventually clip a genuinely
+new deep-set fleet practice.}
 }
 \value{
 \code{df} with \code{hbf_col} values <= 0 or > \code{threshold} converted to
-NA, and a new factor column \code{hbf_outlier} with levels \code{"valid"},
+NA, and a factor column \code{hbf_outlier} with levels \code{"valid"},
 \code{"missing"}, \code{"non_positive"}, \code{"above_threshold"}. \code{"missing"} marks
 rows where \code{hbf_col} was already NA on input -- distinct from
 \code{"valid"}, which means a value was recorded and is plausible.
 }
 \description{
-Longline-specific. Converts HBF values outside the plausible range --
-non-positive, or above \code{threshold} -- to NA, and adds a factor column
+Longline-specific. Converts HBF values outside the plausible range (
+non-positive, or above \code{threshold}) to NA, and adds a factor column
 \code{hbf_outlier} recording \emph{why} each row was flagged. Values are not
 imputed or otherwise corrected: only \code{hbf_col} is blanked, rows are
 kept, so other catch/effort fields on the same row stay usable and

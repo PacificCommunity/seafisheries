@@ -177,6 +177,7 @@ coord_labels <- function() {
 #' @details
 #' Requires the global objects `lon_range` and `lat_range` to be defined in
 #' the environment (used to set `coord_fixed()` limits).
+#' @export
 plot_fisheries_map <- function(df, fill_col, lat_col = "latCent", lon_col = "lonCent",
 							   facet_col = NULL, fill_label = fill_col,
 							   filter_positive = TRUE, filter_sup_quantile = NULL,
@@ -185,7 +186,7 @@ plot_fisheries_map <- function(df, fill_col, lat_col = "latCent", lon_col = "lon
   df <- df %>%
     group_by(.data[[lat_col]], .data[[lon_col]]) %>%
     summarize(!!fill_col := sum(.data[[fill_col]], na.rm = TRUE), .groups = "drop")
-  
+
 	if (filter_positive) {
 		keep <- !is.na(df[[fill_col]]) & df[[fill_col]] > 0
 		df <- df[keep, ]
