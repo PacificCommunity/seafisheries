@@ -1809,3 +1809,100 @@ summarise_region <- function(df, lat_col, lon_col, value_col = NULL) {
 			.groups = "drop"
 		)
 }
+
+
+#' Convert effort-catch data to SEAPODYM EC format
+#'
+#' Writes a effort-catch data frame to a tab-delimited text file in the
+#' format expected by SEAPODYM, preceded by a header giving the number of
+#' fisheries and the record count per fishery.
+#'
+#' @param df A data frame containing at minimum the columns \code{f},
+#'   \code{yr}, \code{mm}, \code{dd}, \code{gr}, \code{lat}, \code{lon},
+#'   \code{res}, \code{E}, \code{C}.
+#' @param file Path to the output text file for the SEAPODYM CE data.
+#'
+#' @return Invisibly \code{NULL}. Called for its side effects: writes
+#'   \code{file} (tab-delimited text).
+#'
+#' @export
+format_EC <- function(df, file){
+		nb_fisheries <- length(unique(df$f))
+		nb_records <- df %>%
+			group_by(f) %>%
+			summarize(n=n(), .groups="drop") %>%
+			pull(n)
+
+		# Printing to file
+		cat(sprintf("%s\n", nb_fisheries), file=file)
+		cat(sprintf("%s\n", paste(nb_records, collapse="\t")), file=file, append=T)
+		cat("f\tyr\tmm\tdd\tgr\tlat\tlon\tres\tE\tC\n", file=file, append=T)
+		pb<-txtProgressBar(style=3)
+		nr <- nrow(df)
+		for (i in 1:nr){
+			setTxtProgressBar(pb,i/nr)
+			cat(paste(df[i,], collapse="\t"), file=file, append=T)
+			cat("\n", file=file, append=T)
+		}
+
+}
+
+#' Convert length-frequency data to SEAPODYM LF format
+#'
+#' Assigns spatial region IDs to a length-frequency data frame based on
+#' unique lon/lat bounding boxes, writes a region lookup table to an RDS
+#' file, and writes the LF records to a tab-delimited text file in the
+#' format expected by SEAPODYM.
+#'
+#' @param df A data frame containing at minimum the columns
+#'   \code{lon_from}, \code{lon_to}, \code{lat_from}, \code{lat_to},
+#'   \code{yr}, \code{qtr}, \code{mm}, \code{f}, plus length-bin columns
+#'   whose names are purely numeric (matched via \code{"\\d+"}).
+#' @param file Path to the output text file for the SEAPODYM LF data.
+#' @param file_regions Path to the output RDS file for the region lookup
+#'   table (columns: \code{reg}, \code{lon_from}, \code{lon_to},
+#'   \code{lat_from}, \code{lat_to}).
+#' @param length_bins Vector of length-bin values; its length gives the
+#'   number of length classes written to the header of \code{file}.
+#' @param min_len Minimum length value, written to the header of
+#'   \code{file}.
+#' @param len_binsize Length bin size used in the header line written to
+#'   \code{file}. Default \code{1}.
+#'
+#' @return Invisibly \code{NULL}. Called for its side effects: writes
+#'   \code{file_regions} (RDS) and \code{file} (tab-delimited text).
+#'
+#' @export
+format_LF <- function(df, file, file_regions, length_bins, min_len, len_binsize=1){
+	tab <- df %>%
+		group_by(lon_from, lon_to, lat_from, lat_to) %>%
+		mutate(reg = cur_group_id()) %>% ungroup() %>%
+		arrange(yr, qtr, mm, f, reg) %>%
+		dplyr::select(lon_from, lon_to, lat_from, lat_to, yr, qtr, mm, f, reg, matches("\\d+"))
+	regions <- tab %>%
+		distinct(reg, .keep_all=T) %>%
+		arrange(reg) %>%
+		dplyr::select(reg, lon_from, lon_to, lat_from, lat_to)
+	saveRDS(regions, file = file_regions)
+	nb_reg <- nrow(regions)
+	nb_fisheries <- length(unique(tab$f))
+	nb_records <- nrow(tab)
+	tab <- tab %>%
+		dplyr::select(-matches("lon_|lat_"))
+
+	# Printing to file
+	cat(sprintf("%s\t%s\t%s\n", nb_reg, nb_fisheries, nb_records), file=file)
+	for (i in 1:nrow(regions)){
+		cat(paste(regions[i,], collapse="\t"), file=file, append=T)
+		cat("\n", file=file, append=T)
+	}
+	cat(sprintf("%s\t%s\t%s\n", length(length_bins), min_len, len_binsize), file=file, append=T)
+	cat(sprintf("yr\tqtr\tmo\tf\treg\tLF[1]\t..\tLF[%s]\n", length(length_bins)), file=file, append=T)
+	pb<-txtProgressBar(style=3)
+	nr <- nrow(tab)
+	for (i in 1:nr){
+		setTxtProgressBar(pb,i/nr)
+		cat(paste(tab[i,], collapse="\t"), file=file, append=T)
+		cat("\n", file=file, append=T)
+	}
+}
