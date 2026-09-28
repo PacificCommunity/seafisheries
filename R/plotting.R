@@ -221,6 +221,7 @@ plot_fisheries_map <- function(df, fill_col, lat_col = "latCent", lon_col = "lon
 #'
 #' @param df Data frame with columns `len` (length), `count` (frequency weight),
 #'   and `f` (fishery code to facet by).
+#' @export
 plot_lf_density <- function(df) {
 	ggplot(df, aes(x = len, weight = count)) +
 		geom_density(fill = "steelblue", alpha = 0.4) +
