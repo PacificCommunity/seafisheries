@@ -1772,6 +1772,7 @@ apply_hampel <- function(df, type, year_window = NULL, radius_km = NULL,
 #' @param lon Numeric vector of longitudes (0-360 convention).
 #'
 #' @return Character vector: `"WCPFC"`, `"EPO"`, or `NA` for points outside both regions.
+#' @export
 region_from_coords <- function(lat, lon) {
 	overlap <- lon >= 210 & lon < 230 & lat <= -4 & lat >= -50
 	wcpfc   <- lon < 210 | (lon < 230 & lat <= -4 & lat >= -60)  # includes overlap
@@ -1797,6 +1798,7 @@ region_from_coords <- function(lat, lon) {
 #'
 #' @return Data frame with one row per region (`"WCPFC"`, `"EPO"`),
 #'   containing `region`, `n_records`, and `total`.
+#' @export
 summarise_region <- function(df, lat_col, lon_col, value_col = NULL) {
 	df <- df |> mutate(region = region_from_coords(.data[[lat_col]], .data[[lon_col]]))
 
