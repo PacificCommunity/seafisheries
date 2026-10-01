@@ -2,6 +2,7 @@
 
 export(apply_hampel)
 export(apply_pacific_mask)
+export(apply_temperature_mask)
 export(bin_to_1cm)
 export(calculate_distance)
 export(compute_grid_center)

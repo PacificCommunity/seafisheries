@@ -38,6 +38,7 @@ customRound(-2.4)  # -2
 \seealso{
 Other cleaning steps:
 \code{\link[=apply_pacific_mask]{apply_pacific_mask()}},
+\code{\link[=apply_temperature_mask]{apply_temperature_mask()}},
 \code{\link[=bin_to_1cm]{bin_to_1cm()}},
 \code{\link[=compute_grid_center]{compute_grid_center()}},
 \code{\link[=convert_school_letters]{convert_school_letters()}},

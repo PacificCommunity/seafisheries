@@ -770,6 +770,65 @@ apply_pacific_mask <- function(df, lat_col, lon_col, pmask_lookup) {
 	df_out
 }
 
+#' Apply the temperature mask
+#'
+#' Anti-joins against a pre-built monthly 1-degree temperature mask, removing
+#' only records whose cell/month has a temperature below `min_temp`. Records
+#' with no temperature in the mask (outside the mask domain or time span, or
+#' NA) are kept and their count is reported. The mask is dated on the 15th of
+#' each month, so record dates are collapsed to the 15th before matching.
+#'
+#' @param df A dataframe, already containing rounded grid-center coordinates.
+#' @param mask_file Character; path to the temperature mask RDS, with columns
+#'   `ymd`, `latCent`, `lonCent`, `temperature`.
+#' @param min_temp Numeric; minimum temperature (degrees C) to keep a record.
+#'   Default 10.
+#' @param lat_col,lon_col Character; names of the grid-center lat/lon columns
+#'   in `df`.
+#' @param date_col Character; name of the date column in `df`.
+#' @param return_removed Logical; if TRUE, also return the rows removed for
+#'   being below `min_temp`. Default FALSE.
+#'
+#' @return The filtered dataframe, or if `return_removed = TRUE` a list with
+#'   `data` (filtered) and `removed` (rows below `min_temp`).
+#'
+#' @family cleaning steps
+#' @export
+apply_temperature_mask <- function(df, mask_file, min_temp = 10,
+								   lat_col, lon_col, date_col,
+								   return_removed = FALSE) {
+	.check_cols_exist(df, c(lat_col, lon_col, date_col), "apply_temperature_mask")
+	n0 <- nrow(df)
+	temp_mask <- readRDS(mask_file)
+
+	df$.ymd_mm <- as.Date(format(df[[date_col]], "%Y-%m-15"))
+	join_by <- stats::setNames(c("latCent", "lonCent", "ymd"),
+							   c(lat_col, lon_col, ".ymd_mm"))
+
+	# untested records are kept, but counted so the coverage gap stays visible
+	n_untested <- nrow(dplyr::anti_join(df, temp_mask, by = join_by))
+	if (n_untested > 0) {
+		cat(n_untested, "entries outside temperature mask coverage (",
+			as.character(min(temp_mask$ymd)), "to", as.character(max(temp_mask$ymd)),
+			") kept untested (", round(n_untested / n0 * 100, 2), "% of data)\n")
+	}
+
+	# which() so NA temperatures in the mask count as untested, not cold
+	cold_cells <- temp_mask[which(temp_mask$temperature < min_temp),
+							c("ymd", "latCent", "lonCent")]
+	df_out <- dplyr::anti_join(df, cold_cells, by = join_by)
+	report_removal(n0 - nrow(df_out), n0,
+				   paste0("below ", min_temp, " C in temperature mask"))
+
+	df_out$.ymd_mm <- NULL
+	if (return_removed) {
+		df_removed <- dplyr::semi_join(df, cold_cells, by = join_by)
+		df_removed$.ymd_mm <- NULL
+		return(list(data = df_out, removed = df_removed))
+	}
+	df_out
+}
+
 #' Flag and clean Hooks Between Floats (HBF) values
 #'
 #' Longline-specific. Converts HBF values outside the plausible range (
