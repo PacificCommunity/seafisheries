@@ -1,0 +1,1160 @@
+---
+title: "Albacore longline: data processing"
+author: RF
+editor_options:
+  chunk_output_type: console
+format:
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+---
+
+```{r setup, echo = F, warning = F, message = F}
+knitr::opts_chunk$set(eval = T, echo = F, message = F, warning = F)
+library(seafisheries)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+
+source(here::here("workflows", "config", "config_alb.R"))
+
+sp   <- tolower(species)               # "alb"
+sp_n <- paste0(sp, "_n")               # target catch in numbers
+sp_w <- paste0(sp, "_w")               # target catch in weight
+n_cols <- paste0(species_all, "_n")
+w_cols <- paste0(species_all, "_w")
+
+if (!dir.exists(sql_folder)) stop("SQL folder not found: ", sql_folder,
+								  ". Run workflows/sql_queries.R or check request_tag.")
+dir.create(save_folder, recursive = TRUE, showWarnings = FALSE)
+
+pmask_lookup  <- readRDS(system.file("extdata/masks/pmask_lookup.RDS", package = "seafisheries"))
+p5mask_lookup <- readRDS(system.file("extdata/masks/p5mask_lookup.RDS", package = "seafisheries"))
+```
+
+```{r helpers}
+# ==============================================================================
+# Helpers. To move to the package once stable.
+# ==============================================================================
+
+loadRaw <- function(name) {
+	f <- file.path(sql_folder, paste0(name, ".RDS"))
+	if (!file.exists(f)) stop("Missing raw file: ", f)
+	readRDS(f)
+}
+
+saveIt <- function(obj, file) {
+	if (save_it) saveRDS(obj, file.path(save_folder, file))
+	invisible(obj)
+}
+
+# ---- Diagnostics -------------------------------------------------------------
+# Everything is collected in .diag and saved to LL_processing_diagnostics.RDS:
+#   steps     one row per cleaning step: dataset, step, rows in, rows out
+#   messages  console output of each step (what the package functions print)
+#   tables    stage comparisons, coordinate conversion summaries, catch quality,
+#             length matching coverage, ...
+.diag <- new.env()
+.diag$steps <- list(); .diag$messages <- list(); .diag$tables <- list()
+
+diagAdd <- function(slot, name, value) {
+	x <- .diag[[slot]]; x[[name]] <- value; .diag[[slot]] <- x
+	invisible(value)
+}
+
+# Runs fun(df, ...), records rows in/out and the printed output.
+# x: a data.frame, or a list with $data. Returns what fun returns.
+runStep <- function(x, dataset, step, fun, ...) {
+	df_in <- if (is.data.frame(x)) x else x$data
+	out <- NULL
+	msg <- utils::capture.output(out <- fun(df_in, ...))
+	df_out <- if (is.data.frame(out)) out else out$data
+	.diag$steps[[length(.diag$steps) + 1]] <- data.frame(dataset = dataset, step = step,
+														 n_in = nrow(df_in), n_out = nrow(df_out))
+	if (length(msg)) diagAdd("messages", paste(dataset, step, sep = " | "), msg)
+	if (verbose && length(msg)) cat(paste0("[", dataset, " | ", step, "]"), msg, sep = "\n")
+	out
+}
+
+stepsTable <- function(ds = NULL) {
+	st <- do.call(rbind, .diag$steps)
+	if (!is.null(ds)) st <- st[st$dataset == ds, ]
+	st$removed <- st$n_in - st$n_out
+	st$pct_removed <- round(100 * st$removed / st$n_in, 2)
+	st
+}
+
+showSteps <- function(ds) {
+	st <- stepsTable(ds)
+	knitr::kable(st[, -1], row.names = FALSE, caption = paste("Cleaning steps:", ds))
+}
+
+# ---- Catch columns from sql_queries.R ----------------------------------------
+# Catch quality before tidyCatch(): per species, records where the species is
+# recorded, where all/some numbers are missing, where all/some weights are missing.
+catchQuality <- function(df, dataset, w_unit) {
+	do.call(rbind, lapply(species_all, function(s) {
+		nrec <- df[[paste0(s, "_nrec")]]
+		w_na <- df[[paste0(s, "_", w_unit, "_na")]]
+		n_na <- if (paste0(s, "_n_na") %in% names(df)) df[[paste0(s, "_n_na")]] else 0 * nrec
+		data.frame(dataset = dataset, species = s, records = nrow(df),
+				   recorded = sum(nrec > 0),
+				   n_all_missing = sum(nrec > 0 & n_na == nrec),
+				   n_partial = sum(n_na > 0 & n_na < nrec),
+				   w_all_missing = sum(nrec > 0 & w_na == nrec),
+				   w_partial = sum(w_na > 0 & w_na < nrec))
+	}))
+}
+
+# <sp>_n / <sp>_<w_unit> -> <sp>_n / <sp>_w (unit unchanged), per species:
+#   not recorded (<sp>_nrec = 0)               -> n = 0, w = 0
+#   recorded, every row without number          -> n = 0 (YFT run behaviour:
+#                                                  the record and its other
+#                                                  species are kept)
+#   recorded, some rows without number          -> n = sum of the others
+#   recorded, some or all rows without weight   -> w = NA (a sum would
+#                                                  underestimate), extrapolated
+#                                                  later as n x mean weight
+#     ... unless no number at all                -> w = sum of the known weights
+#                                                  (nothing to extrapolate from)
+tidyCatch <- function(df, w_unit) {
+	for (s in species_all) {
+		n <- paste0(s, "_n"); w_raw <- paste0(s, "_", w_unit)
+		absent  <- df[[paste0(s, "_nrec")]] == 0
+		no_n    <- !absent & is.na(df[[n]])
+		w_short <- !absent & df[[paste0(s, "_", w_unit, "_na")]] > 0
+		df[[n]][absent | no_n] <- 0
+		df[[w_raw]][absent] <- 0
+		df[[w_raw]][w_short & !no_n] <- NA
+		names(df)[names(df) == w_raw] <- paste0(s, "_w")
+	}
+	df
+}
+
+# Length code conversion to UF: UF = a * len^b, coefficients per code from
+# config (len_conversion). Same as standardize_length_code(), whose
+# coefficients are fixed (YFT).
+convertLenCode <- function(df, conv, len_col = "len", code_col = "len_code") {
+	n_conv <- c()
+	for (code in names(conv)) {
+		i <- which(df[[code_col]] == code)
+		df[[len_col]][i] <- customRound(conv[[code]][["a"]] * as.numeric(df[[len_col]][i])^conv[[code]][["b"]])
+		df[[code_col]][i] <- "UF"
+		n_conv[code] <- length(i)
+	}
+	if (sum(n_conv) > 0) {
+		cat(sum(n_conv), " lengths converted to UF (",
+			paste(names(n_conv), n_conv, sep = ": ", collapse = ", "), "): ",
+			round(sum(n_conv) / nrow(df) * 100, 2), "% of data\n", sep = "")
+	}
+	df
+}
+
+# Exact duplicates ignoring the record id (an id is unique by construction,
+# so remove_duplicates() on a table with its id never removes anything).
+removeContentDuplicates <- function(df, id_col) {
+	n0 <- nrow(df)
+	out <- dplyr::distinct(df, dplyr::across(-dplyr::all_of(id_col)), .keep_all = TRUE)
+	report_removal(n0 - nrow(out), n0, paste0("exact duplicates ignoring ", id_col))
+	out
+}
+
+# ---- Input vs processed tables -----------------------------------------------
+# "Input" value/% relative to the RAW record count. "Processed" % = processed
+# records (or ids) with a valid value / raw records (or ids) * 100.
+pctRetained <- function(raw_valid_count, raw_total) {
+	sprintf("%.2f%%", 100 * raw_valid_count / raw_total)
+}
+
+safeCol <- function(df, col) if (!is.null(col) && col %in% names(df)) df[[col]] else NULL
+
+fmtCoord <- function(lat, lon) {
+	if (is.null(lat) || is.null(lon)) return(NA_character_)
+	lat_num <- suppressWarnings(as.numeric(lat))
+	lon_num <- suppressWarnings(as.numeric(lon))
+	if (all(is.na(lat_num)) || all(is.na(lon_num))) {
+		return(sprintf("%s-%s ; %s,%s", min(lon, na.rm = TRUE), max(lon, na.rm = TRUE),
+					   max(lat, na.rm = TRUE), min(lat, na.rm = TRUE)))
+	}
+	sprintf("%.1f-%.1fE ; %.1fN,%.1fS", min(lon_num, na.rm = TRUE), max(lon_num, na.rm = TRUE),
+			max(lat_num, na.rm = TRUE), min(lat_num, na.rm = TRUE))
+}
+
+ecStageCompare <- function(raw_df, proc_df,
+						   catch_n_col = sp_n, catch_w_col = sp_w,
+						   effort_col = "E", hbf_col = "hbf",
+						   flag_col = "flag", vessel_col = "vesselname", id_label = "Vessels",
+						   date_col_raw = "ymd", date_col_proc = "ymd",
+						   lat_col_raw, lon_col_raw, lat_col_proc, lon_col_proc,
+						   n_unit_raw = "count", w_unit_raw = "kg", effort_unit_raw = "count",
+						   w_unit_proc = "mt", effort_unit_proc = "hundred hooks",
+						   coord_unit_raw = "raw (pre-conversion)", coord_unit_proc = "1 deg x 1 deg") {
+	n_raw <- nrow(raw_df)
+	fields <- "Total"; input_vals <- as.character(n_raw); input_units <- "records"
+	proc_vals <- pctRetained(nrow(proc_df), n_raw); proc_units <- "-"
+
+	add_row <- function(field, raw_x, proc_x, in_unit, out_unit, count_type = TRUE) {
+		fields <<- c(fields, field)
+		if (count_type) {
+			input_vals <<- c(input_vals, pctRetained(sum(!is.na(raw_x)), n_raw))
+			proc_vals  <<- c(proc_vals,  pctRetained(sum(!is.na(proc_x)), n_raw))
+		} else {
+			input_vals <<- c(input_vals, as.character(dplyr::n_distinct(raw_x, na.rm = TRUE)))
+			proc_vals  <<- c(proc_vals,  pctRetained(dplyr::n_distinct(proc_x, na.rm = TRUE),
+													 dplyr::n_distinct(raw_x, na.rm = TRUE)))
+		}
+		input_units <<- c(input_units, in_unit); proc_units <<- c(proc_units, out_unit)
+	}
+
+	add_row(paste0("Catch ", species, " (n)"), safeCol(raw_df, catch_n_col), safeCol(proc_df, catch_n_col), n_unit_raw, n_unit_raw)
+	add_row(paste0("Catch ", species, " (w)"), safeCol(raw_df, catch_w_col), safeCol(proc_df, catch_w_col), w_unit_raw, w_unit_proc)
+	add_row("Effort", safeCol(raw_df, effort_col), safeCol(proc_df, effort_col), effort_unit_raw, effort_unit_proc)
+	if (!is.null(hbf_col) && hbf_col %in% names(raw_df))
+		add_row("Hooks Between Floats", safeCol(raw_df, hbf_col), safeCol(proc_df, hbf_col), "count", "count")
+	add_row("Countries", safeCol(raw_df, flag_col), safeCol(proc_df, flag_col), "flag", "flag", count_type = FALSE)
+	if (!is.null(vessel_col))
+		add_row(id_label, safeCol(raw_df, vessel_col), safeCol(proc_df, vessel_col), "id", "id", count_type = FALSE)
+
+	date_raw <- safeCol(raw_df, date_col_raw); date_proc <- safeCol(proc_df, date_col_proc)
+	fields <- c(fields, "Date Range")
+	input_vals <- c(input_vals, if (!is.null(date_raw)) paste(format(range(date_raw, na.rm = TRUE)), collapse = " - ") else NA_character_)
+	proc_vals  <- c(proc_vals,  if (!is.null(date_proc)) paste(format(range(date_proc, na.rm = TRUE)), collapse = " - ") else NA_character_)
+	input_units <- c(input_units, "yyyy-mm-dd"); proc_units <- c(proc_units, "yyyy-mm-dd")
+
+	fields <- c(fields, "Coordinates")
+	input_vals <- c(input_vals, fmtCoord(safeCol(raw_df, lat_col_raw), safeCol(raw_df, lon_col_raw)))
+	proc_vals  <- c(proc_vals,  fmtCoord(safeCol(proc_df, lat_col_proc), safeCol(proc_df, lon_col_proc)))
+	input_units <- c(input_units, coord_unit_raw); proc_units <- c(proc_units, coord_unit_proc)
+
+	tibble::tibble(Field = fields,
+				   `Input value/range` = input_vals, `Input unit/format` = input_units,
+				   `Processed value/range` = proc_vals, `Processed unit/format` = proc_units)
+}
+
+# LF variant. sample_group_cols: the columns defining one sample, applied to
+# both raw and processed frames.
+lfStageCompare <- function(raw_df, proc_df, sample_group_cols,
+						   flag_col = "flag", fleet_col = NULL, id_label = "Vessels",
+						   date_col_raw, date_col_proc, date_fmt = "yyyy-mm-dd",
+						   lat_col_raw, lon_col_raw, lat_col_proc, lon_col_proc,
+						   coord_unit_raw = "raw (pre-conversion)", coord_unit_proc = "1 deg x 1 deg") {
+	n_samples <- function(df) {
+		cols <- intersect(sample_group_cols, names(df))
+		if (length(cols) == 0) return(NA_integer_)
+		nrow(dplyr::distinct(df, dplyr::across(dplyr::all_of(cols))))
+	}
+	n_raw_samples <- n_samples(raw_df); n_proc_samples <- n_samples(proc_df)
+
+	fields <- "Samples"; input_vals <- as.character(n_raw_samples)
+	proc_vals <- if (!is.na(n_raw_samples) && n_raw_samples > 0) pctRetained(n_proc_samples, n_raw_samples) else NA_character_
+	input_units <- "-"; proc_units <- "-"
+
+	fields <- c(fields, "Countries")
+	input_vals <- c(input_vals, as.character(dplyr::n_distinct(safeCol(raw_df, flag_col), na.rm = TRUE)))
+	proc_vals  <- c(proc_vals,  pctRetained(dplyr::n_distinct(safeCol(proc_df, flag_col), na.rm = TRUE),
+											dplyr::n_distinct(safeCol(raw_df, flag_col), na.rm = TRUE)))
+	input_units <- c(input_units, "flag"); proc_units <- c(proc_units, "flag")
+
+	if (!is.null(fleet_col)) {
+		fields <- c(fields, id_label)
+		raw_fleet <- safeCol(raw_df, fleet_col); proc_fleet <- safeCol(proc_df, fleet_col)
+		input_vals <- c(input_vals, if (!is.null(raw_fleet)) as.character(dplyr::n_distinct(raw_fleet, na.rm = TRUE)) else NA_character_)
+		proc_vals  <- c(proc_vals,  if (!is.null(proc_fleet) && !is.null(raw_fleet))
+			pctRetained(dplyr::n_distinct(proc_fleet, na.rm = TRUE), dplyr::n_distinct(raw_fleet, na.rm = TRUE))
+			else "NA (column dropped by this stage)")
+		input_units <- c(input_units, "id"); proc_units <- c(proc_units, "id")
+	}
+
+	fmt_date <- function(x) if (is.null(x)) NA_character_ else if (date_fmt == "yyyy-mm-dd")
+		paste(format(range(x, na.rm = TRUE)), collapse = " - ") else paste(range(x, na.rm = TRUE), collapse = " - ")
+	fields <- c(fields, "Date Range")
+	input_vals <- c(input_vals, fmt_date(safeCol(raw_df, date_col_raw)))
+	proc_vals  <- c(proc_vals,  fmt_date(safeCol(proc_df, date_col_proc)))
+	input_units <- c(input_units, date_fmt); proc_units <- c(proc_units, date_fmt)
+
+	fields <- c(fields, "Coordinates")
+	input_vals <- c(input_vals, fmtCoord(safeCol(raw_df, lat_col_raw), safeCol(raw_df, lon_col_raw)))
+	proc_vals  <- c(proc_vals,  fmtCoord(safeCol(proc_df, lat_col_proc), safeCol(proc_df, lon_col_proc)))
+	input_units <- c(input_units, coord_unit_raw); proc_units <- c(proc_units, coord_unit_proc)
+
+	tibble::tibble(Field = fields,
+				   `Input value/range` = input_vals, `Input unit/format` = input_units,
+				   `Processed value/range` = proc_vals, `Processed unit/format` = proc_units)
+}
+```
+
+# Geo referenced catch effort data - Operational
+
+All catch columns (`yft`, `skj`, `bet`, `alb`, `oth`) are kept: the species
+composition is used to define the fisheries. The target species (`r species`)
+only changes the catch column checked in the input/processed tables and, later,
+the catch sent to SEAPODYM.
+
+## Captain logbooks
+
+```{r cap_load}
+cap_sql <- loadRaw("EC_LL_captain")
+
+# The SQL keeps every activity type; fishing sets only, as in the YFT run
+EC_raw <- runStep(cap_sql, "captain", "activity_id == 1",
+				  function(d) dplyr::filter(d, activity_id == 1))
+# A few log_set_id appear twice (left join on log.sets_ll not 1:1). The catch
+# is aggregated per log_set_id in the SQL, so each copy carries the full catch:
+# one row per log_set_id is kept.
+EC_raw <- runStep(EC_raw, "captain", "one row per log_set_id",
+				  function(d) dplyr::distinct(d, log_set_id, .keep_all = TRUE))
+diagAdd("tables", "catch_quality_captain", catchQuality(EC_raw, "captain", "kg"))
+
+# catch in numbers and kg, effort in hooks
+EC_raw <- EC_raw |>
+	tidyCatch(w_unit = "kg") |>
+	transmute(log_set_id, flag = flag_id, vesselname,
+			  ymd = as.Date(logdate),
+			  latitude = latd, longitude = lond,
+			  E = as.numeric(hooks_n), hbf = as.numeric(hk_bt_flt_n),
+			  across(all_of(c(n_cols, w_cols)), as.numeric))
+rm(cap_sql)
+
+# Snapshot for the input/processed diagnostic table
+EC_cap_raw <- EC_raw
+```
+
+### Data cleaning
+
+```{r cap_clean}
+res <- runStep(EC_raw, "captain", "convert coordinates",
+			   function(d) convert_coordinates_df(d, report = TRUE))
+diagAdd("tables", "coords_captain", res$summary)
+EC_raw <- res$data |>
+	mutate(latCent = roundTo.5(latitude), lonCent = roundTo.5(longitude))
+
+EC_raw <- runStep(EC_raw, "captain", "remove_invalid", remove_invalid,
+				  required_cols = c("ymd", "latitude", "longitude", "E", n_cols))
+EC_raw <- runStep(EC_raw, "captain", "remove_zero_fisheries", remove_zero_fisheries,
+				  catch_cols = n_cols, effort_col = "E")
+# check plot to determine cutoff in data
+# plot_hbf_histogram(EC_raw, hbf_col = "hbf", xlim = c(0, 200), binwidth = 1, log_y = TRUE,
+#					 candidate_ceilings = c(50, 60, 70, 80, 90, 100), facet_col = "flag")
+EC_raw <- runStep(EC_raw, "captain", "treat_hbf", treat_hbf,
+				  hbf_col = "hbf", threshold = hbf_threshold_cap)
+EC_raw <- runStep(EC_raw, "captain", "trim_vesselname", trim_vesselname,
+				  vesselname_col = "vesselname")
+EC_raw <- runStep(EC_raw, "captain", "duplicates", removeContentDuplicates,
+				  id_col = "log_set_id")
+EC_raw <- runStep(EC_raw, "captain", "apply_pacific_mask", apply_pacific_mask,
+				  lat_col = "latCent", lon_col = "lonCent", pmask_lookup = pmask_lookup)
+if (use_temperature_mask)
+	EC_raw <- runStep(EC_raw, "captain", "apply_temperature_mask", apply_temperature_mask,
+					  mask_file = temperature_mask_file, min_temp = min_temp,
+					  lat_col = "latCent", lon_col = "lonCent", date_col = "ymd")
+
+# w in metric tons, E in hundreds of hooks
+EC_raw <- EC_raw |>
+	mutate(across(all_of(w_cols), ~ .x / 1000), E = E / 100, type = "captain")
+
+EC_list <- runStep(EC_raw, "captain", "remove_dummy_fisheries", remove_dummy_fisheries,
+				   catch_cols = n_cols, effort_col = "E", return_dummy = TRUE)
+EC_cap <- EC_list$data
+saveIt(EC_cap, "LL_EC_cap.RDS")
+saveIt(EC_list$dummy, "LL_cap_dummy.RDS")
+```
+
+```{r cap_diag}
+diagAdd("tables", "stage_captain",
+		ecStageCompare(EC_cap_raw, EC_cap, vessel_col = "vesselname",
+					   lat_col_raw = "latitude", lon_col_raw = "longitude",
+					   lat_col_proc = "latCent", lon_col_proc = "lonCent"))
+knitr::kable(.diag$tables$stage_captain, caption = "Captain's logbook data: input vs processed")
+showSteps("captain")
+```
+
+## Observer logbook
+
+```{r obs_load}
+obs_sql <- loadRaw("EC_LL_obs")
+diagAdd("tables", "catch_quality_observer", catchQuality(obs_sql, "observer", "kg"))
+
+# catch in numbers and kg, effort in hooks
+EC_raw <- obs_sql |>
+	tidyCatch(w_unit = "kg") |>
+	transmute(l_set_id, flag = vessel_flag_id, vesselname = vessel_name,
+			  ymd = as.Date(set_date),
+			  latitude = set_start_lat, longitude = set_start_lon,
+			  E = as.numeric(hook_set), hbf = as.numeric(hk_bt_flt),
+			  across(all_of(c(n_cols, w_cols)), as.numeric))
+rm(obs_sql)
+
+# Snapshot for the input/processed diagnostic table
+EC_obs_raw <- EC_raw
+```
+
+### Data cleaning
+
+```{r obs_clean}
+res <- runStep(EC_raw, "observer", "convert coordinates",
+			   function(d) convert_coordinates_df(d, report = TRUE))
+diagAdd("tables", "coords_observer", res$summary)
+EC_raw <- res$data |>
+	mutate(latCent = roundTo.5(latitude), lonCent = roundTo.5(longitude))
+
+EC_raw <- runStep(EC_raw, "observer", "remove_invalid", remove_invalid,
+				  required_cols = c("ymd", "latitude", "longitude", "E", n_cols))
+EC_raw <- runStep(EC_raw, "observer", "remove_zero_fisheries", remove_zero_fisheries,
+				  catch_cols = n_cols, effort_col = "E")
+# check plot to determine cutoff in data
+# plot_hbf_histogram(EC_raw, hbf_col = "hbf", xlim = c(40, 80), binwidth = 1, log_y = TRUE,
+#					 candidate_ceilings = c(50, 60, 70, 80, 90, 100), facet_col = "flag")
+# YFT run: hbf look correct until 52, sparse and likely erroneous above.
+EC_raw <- runStep(EC_raw, "observer", "treat_hbf", treat_hbf,
+				  hbf_col = "hbf", threshold = hbf_threshold_obs)
+EC_raw <- runStep(EC_raw, "observer", "trim_vesselname", trim_vesselname,
+				  vesselname_col = "vesselname")
+EC_raw <- runStep(EC_raw, "observer", "duplicates", removeContentDuplicates,
+				  id_col = "l_set_id")
+EC_raw <- runStep(EC_raw, "observer", "apply_pacific_mask", apply_pacific_mask,
+				  lat_col = "latCent", lon_col = "lonCent", pmask_lookup = pmask_lookup)
+if (use_temperature_mask)
+	EC_raw <- runStep(EC_raw, "observer", "apply_temperature_mask", apply_temperature_mask,
+					  mask_file = temperature_mask_file, min_temp = min_temp,
+					  lat_col = "latCent", lon_col = "lonCent", date_col = "ymd")
+
+# w in metric tons, E in hundreds of hooks
+EC_raw <- EC_raw |>
+	mutate(across(all_of(w_cols), ~ .x / 1000), E = E / 100, type = "observer")
+
+EC_list <- runStep(EC_raw, "observer", "remove_dummy_fisheries", remove_dummy_fisheries,
+				   catch_cols = n_cols, effort_col = "E", return_dummy = TRUE)
+EC_obs <- EC_list$data
+saveIt(EC_obs, "LL_EC_obs.RDS")
+saveIt(EC_list$dummy, "LL_obs_dummy.RDS")
+```
+
+```{r obs_diag}
+diagAdd("tables", "stage_observer",
+		ecStageCompare(EC_obs_raw, EC_obs, vessel_col = "vesselname",
+					   lat_col_raw = "latitude", lon_col_raw = "longitude",
+					   lat_col_proc = "latCent", lon_col_proc = "lonCent"))
+knitr::kable(.diag$tables$stage_observer, caption = "Observer logbook data: input vs processed")
+showSteps("observer")
+```
+
+## Merging captains and observers
+
+```{r cap_obs_merge}
+dedup_key <- c("flag", "vesselname", "ymd", "latCent", "lonCent")
+
+# captain records also present in observer data -> observer takes precedence
+ll_dupe <- EC_cap |> semi_join(EC_obs, by = dedup_key)
+cap_unique <- EC_cap |> anti_join(ll_dupe, by = dedup_key)
+EC_opr <- dplyr::bind_rows(cap_unique, EC_obs)
+
+# NA weight with a zero count: species recorded with neither a number nor a
+# weight. Its catch is unknown and becomes 0 at the weight extrapolation.
+diagAdd("tables", "catch_unknown_opr", data.frame(species = species_all,
+	records = sapply(species_all, function(s)
+		sum(is.na(EC_opr[[paste0(s, "_w")]]) & EC_opr[[paste0(s, "_n")]] == 0)),
+	row.names = NULL))
+
+# diagnostic only: days where multiple captain sets collapsed into one observer record
+row_dupe <- EC_cap |>
+	group_by(flag, vesselname, ymd) |>
+	filter(n() > 1) |>
+	ungroup() |>
+	semi_join(EC_obs, by = dedup_key)
+
+diagAdd("tables", "merge_cap_obs", data.frame(
+	captain = nrow(EC_cap), observer = nrow(EC_obs),
+	captain_removed_as_observer_duplicate = nrow(ll_dupe),
+	pct_of_captain = round(100 * nrow(ll_dupe) / nrow(EC_cap), 2),
+	from_days_with_several_captain_sets = nrow(row_dupe),
+	operational = nrow(EC_opr)))
+knitr::kable(.diag$tables$merge_cap_obs, caption = "Merging captain and observer records")
+
+# NA weights left (partial weights from tidyCatch()), extrapolated after the
+# monthly aggregation
+diagAdd("tables", "na_weight_opr",
+		data.frame(column = w_cols, n_na = sapply(w_cols, function(w) sum(is.na(EC_opr[[w]]))),
+				   row.names = NULL))
+
+saveIt(EC_opr, "LL_EC_opr.RDS")
+```
+
+# Geo referenced catch effort data - Raised
+
+```{r rai_load}
+rai_sql <- loadRaw("EC_LL_rai")
+diagAdd("tables", "catch_quality_raised", catchQuality(rai_sql, "raised", "mt"))
+
+# catch in numbers and metric tons, effort in hundreds of hooks
+EC_raw <- rai_sql |>
+	tidyCatch(w_unit = "mt") |>
+	transmute(l_best_id, flag = flag_code, fleet = fleet_code, fleet_desc,
+			  yr = as.integer(yy), mm = as.integer(mm),
+			  ymd = make_date(yr, mm, 15),
+			  latitude = lat_short, longitude = lon_short,
+			  E = as.numeric(hhooks),
+			  across(all_of(c(n_cols, w_cols)), as.numeric))
+rm(rai_sql)
+
+# Snapshot for the input/processed diagnostic table
+EC_rai_raw <- EC_raw
+```
+
+## Data cleaning
+
+```{r rai_clean}
+# Same species as the YFT run (no "oth" in the old raised query)
+rai_catch_cols <- paste0(c("yft", "bet", "alb", "skj"), "_n")
+
+res <- runStep(EC_raw, "raised", "convert coordinates",
+			   function(d) convert_coordinates_df(d, report = TRUE))
+diagAdd("tables", "coords_raised", res$summary)
+EC_raw <- res$data |>
+	mutate(latCent = latitude + 2.5, lonCent = longitude + 2.5)
+
+# Only the target weight is required. Numbers may be NA (records reported in
+# weight only): kept, as in the YFT run where they were set to 0. They get no
+# fishery from the species composition but still count in the delta.
+# Non-target weights may be NA (partial weights).
+EC_raw <- runStep(EC_raw, "raised", "remove_invalid", remove_invalid,
+				  required_cols = c("ymd", "latitude", "longitude", "E", sp_w))
+EC_raw <- runStep(EC_raw, "raised", "remove_zero_fisheries", remove_zero_fisheries,
+				  catch_cols = rai_catch_cols, effort_col = "E")
+EC_raw <- runStep(EC_raw, "raised", "duplicates", removeContentDuplicates,
+				  id_col = "l_best_id")
+EC_raw <- runStep(EC_raw, "raised", "apply_pacific_mask", apply_pacific_mask,
+				  lat_col = "latCent", lon_col = "lonCent", pmask_lookup = p5mask_lookup)
+EC_raw <- EC_raw |> mutate(type = "raised")
+
+EC_list <- runStep(EC_raw, "raised", "remove_dummy_fisheries", remove_dummy_fisheries,
+				   catch_cols = rai_catch_cols, effort_col = "E", return_dummy = TRUE)
+EC_rai <- EC_list$data
+
+# The old query grouped records sharing flag/fleet/month/cell/hhooks into one
+# row. Now one row per l_best_id: how many records share a stratum?
+multi <- EC_rai |> count(flag, fleet, ymd, latCent, lonCent) |> filter(n > 1)
+diagAdd("tables", "raised_shared_strata", data.frame(
+	strata_with_several_records = nrow(multi),
+	records_in_those_strata = sum(multi$n),
+	pct_of_records = round(100 * sum(multi$n) / nrow(EC_rai), 2)))
+
+saveIt(EC_rai, "LL_EC_rai.RDS")
+saveIt(EC_list$dummy, "LL_rai_dummy.RDS")
+```
+
+```{r rai_diag}
+diagAdd("tables", "stage_raised",
+		ecStageCompare(EC_rai_raw, EC_rai, hbf_col = NULL, vessel_col = "fleet", id_label = "Fleets",
+					   lat_col_raw = "latitude", lon_col_raw = "longitude",
+					   lat_col_proc = "latCent", lon_col_proc = "lonCent",
+					   w_unit_raw = "mt", w_unit_proc = "mt",
+					   effort_unit_raw = "hundred hooks", effort_unit_proc = "hundred hooks",
+					   coord_unit_proc = "5 deg x 5 deg"))
+knitr::kable(.diag$tables$stage_raised, caption = "Raised data: input vs processed")
+showSteps("raised")
+knitr::kable(.diag$tables$raised_shared_strata,
+			 caption = "Raised records sharing flag x fleet x month x 5 deg cell")
+```
+
+# Geo referenced operational length frequency data (Tufman2)
+
+```{r LF_opr_load}
+LF_dat <- loadRaw("LF_tufman") |>
+	runStep("LF operational", paste0("sp_code == ", species, ", longline, LL observer + port"),
+			function(d) dplyr::filter(d, sp_code == species, gear == "L",
+									  data_source %in% c("longline observer", "port sampling"))) |>
+	rename(flag = flag_id, gr = gear) |>
+	mutate(ymd = as.Date(measure_date), len = as.numeric(len), id = as.character(id)) |>
+	dplyr::select(-all_tuna_sampled, -all_tuna_unloaded)
+
+# Snapshots for the input/processed diagnostic tables
+LF_port_raw <- LF_dat |> filter(data_source == "port sampling")
+LF_obs_raw  <- LF_dat |> filter(data_source == "longline observer")
+```
+
+## Data cleaning
+
+```{r LF_opr_clean}
+res <- runStep(LF_dat, "LF operational", "convert coordinates (from)",
+			   function(d) convert_coordinates_df(d, lat_col = "lat_from", lon_col = "lon_from", report = TRUE))
+diagAdd("tables", "coords_LF_opr_from", res$summary)
+LF_dat <- res$data
+
+# observer rows have no lat_to/lon_to by construction
+res <- runStep(LF_dat, "LF operational", "convert coordinates (to)",
+			   function(d) convert_coordinates_df(d, lat_col = "lat_to", lon_col = "lon_to", report = TRUE))
+diagAdd("tables", "coords_LF_opr_to", res$summary)
+LF_dat <- res$data
+
+LF_dat <- runStep(LF_dat, "LF operational", "remove_invalid", remove_invalid,
+				  required_cols = c("len", "lat_from", "lon_from"))
+
+LF_dat <- LF_dat |>
+	mutate(latCent = ifelse(is.na(lat_to), roundTo.5(lat_from), roundTo.5((lat_from + lat_to) / 2)),
+		   lonCent = ifelse(is.na(lon_to), roundTo.5(lon_from), roundTo.5((lon_from + lon_to) / 2)))
+
+# infer first (recovers NULL/NM/XX from trip-mates), then convert SD/US/PS to
+# UF with the config coefficients, then drop whatever is still not UF.
+LF_dat <- runStep(LF_dat, "LF operational", "infer_len_code_from_trip", infer_len_code_from_trip,
+				  valid_codes = c("UF", names(len_conversion)))
+LF_dat <- runStep(LF_dat, "LF operational", "convert length codes to UF", convertLenCode,
+				  conv = len_conversion)
+LF_dat <- runStep(LF_dat, "LF operational", "len_code == UF", filter_valid_categories,
+				  col = "len_code", valid_values = "UF")
+LF_dat <- runStep(LF_dat, "LF operational", "trim_vesselname", trim_vesselname,
+				  vesselname_col = "vesselname")
+LF_dat$len <- customRound(LF_dat$len)
+
+# Port: trip start/end can legitimately span land and sea, so bounding-box
+# overlap only, no exact grid mask.
+LF_port <- LF_dat |>
+	filter(data_source == "port sampling") |>
+	runStep("LF port", "bounding box overlap",
+			function(d) dplyr::filter(d, lat_to >= lat_range[1] & lat_from <= lat_range[2],
+									  lon_to >= lon_range[1] & lon_from <= lon_range[2]))
+
+# Observer: one exact point per set, range-check the point, then mask against
+# the 1x1 land/sea grid.
+LF_obs <- LF_dat |>
+	filter(data_source == "longline observer") |>
+	runStep("LF observer", "filter_bounding_box", filter_bounding_box,
+			lat_col = "lat_from", lon_col = "lon_from",
+			lat_range = lat_range, lon_range = lon_range) |>
+	runStep("LF observer", "apply_pacific_mask", apply_pacific_mask,
+			lat_col = "latCent", lon_col = "lonCent", pmask_lookup = pmask_lookup)
+
+LF_dat <- bind_rows(LF_port, LF_obs)
+saveIt(LF_dat, "LL_LF_opr.RDS")
+```
+
+```{r LF_opr_diag}
+diagAdd("tables", "stage_LF_port",
+		lfStageCompare(LF_port_raw, LF_dat |> filter(data_source == "port sampling"),
+					   sample_group_cols = c("vesselname", "ymd"),
+					   date_col_raw = "ymd", date_col_proc = "ymd",
+					   lat_col_raw = "lat_from", lon_col_raw = "lon_from",
+					   lat_col_proc = "latCent", lon_col_proc = "lonCent"))
+knitr::kable(.diag$tables$stage_LF_port, caption = "Port sampling length frequency data: input vs processed")
+
+diagAdd("tables", "stage_LF_observer",
+		lfStageCompare(LF_obs_raw, LF_dat |> filter(data_source == "longline observer"),
+					   sample_group_cols = c("vesselname", "ymd"),
+					   date_col_raw = "ymd", date_col_proc = "ymd",
+					   lat_col_raw = "lat_from", lon_col_raw = "lon_from",
+					   lat_col_proc = "latCent", lon_col_proc = "lonCent"))
+knitr::kable(.diag$tables$stage_LF_observer, caption = "Observer length frequency data: input vs processed")
+
+knitr::kable(rbind(stepsTable("LF operational"), stepsTable("LF port"), stepsTable("LF observer")),
+			 row.names = FALSE, caption = "Cleaning steps: operational length frequency")
+```
+
+```{r LF_opr_agg}
+# multiple distinct ids on the same vessel-day are preserved as separate rows.
+# LF_obs/LF_port can have >1 row per (flag, vesselname, ymd)
+LF_agg <- LF_dat |>
+	group_by(flag, vesselname, ymd, data_source, id) |>
+	summarise(mean_len = mean(len, na.rm = TRUE),
+			  lon_from = mean(lon_from, na.rm = TRUE),
+			  lat_from = mean(lat_from, na.rm = TRUE),
+			  lon_to = mean(lon_to, na.rm = TRUE),
+			  lat_to = mean(lat_to, na.rm = TRUE),
+			  count = n(),
+			  .groups = "drop") |>
+	mutate(latCent = ifelse(is.nan(lat_to), roundTo.5(lat_from), roundTo.5((lat_from + lat_to) / 2)),
+		   lonCent = ifelse(is.nan(lon_to), roundTo.5(lon_from), roundTo.5((lon_from + lon_to) / 2)))
+
+# Sanity: no id should have been dropped by this aggregation
+if (n_distinct(LF_dat$id) != n_distinct(LF_agg$id))
+	warning("ids lost when aggregating LF_dat to LF_agg")
+diagAdd("tables", "LF_opr_agg", data.frame(fish = nrow(LF_dat), id_level_records = nrow(LF_agg),
+										   ids = n_distinct(LF_agg$id)))
+saveIt(LF_agg, "LL_LF_opr_agg.RDS")
+```
+
+# Geo referenced length frequency data aggregated
+
+```{r LF_agg_load}
+LF_raw <- loadRaw("LF_agg") |>
+	runStep("LF aggregated", paste0("SP_ID == ", species, ", GR == L"),
+			function(d) dplyr::filter(d, SP_ID == species, GR == "L")) |>
+	rename(
+		id = STRAT_ID,
+		yr = YR,
+		qtr = QTR,
+		mm = MON,
+		gr = GR,
+		flag = FLAG_ID,
+		fleet = FLEET_ID,
+		latitude = LAT_SHORT,
+		longitude = LON_SHORT,
+		len = LEN,
+		count = FREQ) |>
+	mutate(len = as.numeric(len),
+		   count = as.numeric(count),
+		   LSTRAT = as.numeric(LSTRAT))
+
+# Snapshot for the input/processed diagnostic table
+LF_agg_raw <- LF_raw
+```
+
+## Look up tables
+
+```{r astrat_lookup}
+astrat_lookup <- data.frame(
+	ASTRAT     = c("5",  "0", "F",  "T", "A", "1"),
+	lon_offset = c(2.5,  5,   5,    10,  5,   0.5),
+	lat_offset = c(2.5,  5,   2.5,  5,   2,   0.5)
+)
+valid_astrat <- astrat_lookup$ASTRAT
+knitr::kable(astrat_lookup, caption = "ASTRAT resolution reference")
+```
+
+## Data cleaning
+
+```{r LF_agg_clean}
+res <- runStep(LF_raw, "LF aggregated", "convert coordinates",
+			   function(d) convert_coordinates_df(d, lat_col = "latitude", lon_col = "longitude", report = TRUE))
+diagAdd("tables", "coords_LF_agg", res$summary)
+LF_raw <- res$data
+
+LF_clean <- runStep(LF_raw, "LF aggregated", "process_lf_data", process_lf_data,
+	required_cols = c("latitude", "longitude", "len"),
+	mm_col        = "mm",
+	qtr_col       = "qtr",
+	strat_col     = "ASTRAT",
+	valid_strat   = valid_astrat,
+	strat_lookup  = astrat_lookup,
+	lon_col       = "longitude",
+	lat_col       = "latitude",
+	lat_range     = lat_range,
+	lon_range     = lon_range,
+	group_cols    = c("yr", "qtr", "flag", "latCent", "lonCent", "ASTRAT", "LSTRAT"),
+	len_col       = "len",
+	freq_col      = "count",
+	min_bins      = lf_min_bins)
+
+LF_uniform_bins <- bin_to_1cm(LF_clean)
+saveIt(LF_uniform_bins, "LL_LF_uniform.RDS")
+```
+
+```{r LF_agg_diag}
+diagAdd("tables", "stage_LF_agg",
+		lfStageCompare(LF_agg_raw, LF_uniform_bins,
+					   sample_group_cols = c("flag", "yr", "qtr", "latitude", "longitude"),
+					   fleet_col = "fleet", id_label = "Fleets",
+					   date_col_raw = "yr", date_col_proc = "yr", date_fmt = "yyyy",
+					   lat_col_raw = "latitude", lon_col_raw = "longitude",
+					   lat_col_proc = "latCent", lon_col_proc = "lonCent",
+					   coord_unit_proc = "5x5 to 20x10 deg (see ASTRAT lookup)"))
+knitr::kable(.diag$tables$stage_LF_agg, caption = "Aggregated length frequency data: input vs processed")
+showSteps("LF aggregated")
+```
+
+# Adding length data to operational EC dataset
+
+## Using operational LF
+
+```{r add_length_from_opr}
+# Split trip/day-level LF data by source
+LF_obs <- LF_agg |>
+	filter(data_source == "longline observer") |>
+	rename(id_obs = id) |>
+	dplyr::select(flag, vesselname, ymd, id_obs, mean_len, count)
+
+LF_port <- LF_agg |>
+	filter(data_source == "port sampling") |>
+	rename(id_portsampling = id) |>
+	dplyr::select(flag, vesselname, ymd, id_portsampling, mean_len, count)
+
+# multiple ids per vessel-day is expected
+if (anyDuplicated(LF_agg[, c("ymd", "flag", "vesselname", "data_source", "id")]) != 0)
+	stop("Duplicated flag x vesselname x ymd x data_source x id in LF_agg not handled downstream")
+# a single port-sampling id can't belong to two different trips/vessels
+if (anyDuplicated(LF_port$id_portsampling) != 0)
+	stop("Duplicated port sampling id in LF_agg not handled downstream")
+
+# Link EC and LF: case 0, exact same-day observer match, plus trip grouping
+EC_dat_IDed <- EC_opr |>
+	dplyr::select(-type) |>
+	mutate(origin_CE = TRUE) |>
+	full_join(LF_obs |> rename(obs_mean_len = mean_len, obs_count = count) |> mutate(origin_LF_obs = TRUE),
+			  by = c("flag", "vesselname", "ymd"), relationship = "many-to-many") |>
+	full_join(LF_port |> mutate(origin_LF_port = TRUE),
+			  by = c("flag", "vesselname", "ymd"), relationship = "many-to-many") |>
+	mutate(origin = case_when(origin_CE & origin_LF_obs ~ "CE_LF_obs",
+							  origin_CE                 ~ "CE",
+							  origin_LF_obs             ~ "LF_obs",
+							  origin_LF_port            ~ "LF_port",
+							  TRUE ~ NA_character_)) |>
+	dplyr::select(-matches("^origin_")) |>
+	mutate(match_type = ifelse(origin == "CE_LF_obs", "flag-vesselname-date-observer", NA_character_)) |>
+	arrange(flag, vesselname, ymd) |>
+	group_by(flag, vesselname) |>
+	mutate(date_diff = as.numeric(ymd - lag(ymd, default = first(ymd))),
+		   new_group = cumsum(is.na(date_diff) | date_diff > trip_gap_days)) |>
+	group_by(flag, vesselname, new_group) |>
+	mutate(newtrip_id = cur_group_id()) |>
+	ungroup() |>
+	dplyr::select(-date_diff, -new_group)
+```
+
+```{r add_length_from_opr2}
+# Case 0b: apportion each id_obs across every EC row it matches, weighted by the
+# row's share of the TARGET species catch (numbers). Equal split when the id_obs
+# group caught none of the target species.
+EC_dat_IDed <- EC_dat_IDed |>
+	group_by(id_obs) |>
+	mutate(n_matches_obs = sum(match_type == "flag-vesselname-date-observer", na.rm = TRUE),
+		   total_sp_obs  = sum(ifelse(match_type == "flag-vesselname-date-observer", .data[[sp_n]], NA), na.rm = TRUE),
+		   weight_direct = case_when(
+		   	match_type == "flag-vesselname-date-observer" & total_sp_obs > 0 ~ .data[[sp_n]] / total_sp_obs,
+		   	match_type == "flag-vesselname-date-observer" ~ 1 / n_matches_obs,
+		   	TRUE ~ NA_real_)) |>
+	ungroup() |>
+	dplyr::select(-n_matches_obs, -total_sp_obs)
+
+# weight_direct must sum to 1 within every id_obs group, and be NA elsewhere
+weight_direct_check <- EC_dat_IDed |>
+	filter(match_type == "flag-vesselname-date-observer") |>
+	group_by(id_obs) |>
+	summarise(total_weight = sum(weight_direct, na.rm = TRUE), .groups = "drop")
+n_bad_weight_groups <- sum(abs(weight_direct_check$total_weight - 1) > 1e-6)
+n_leaked <- sum(!is.na(EC_dat_IDed$weight_direct) &
+					EC_dat_IDed$match_type != "flag-vesselname-date-observer", na.rm = TRUE)
+if (n_bad_weight_groups > 0) warning("weight_direct groups not summing to 1: ", n_bad_weight_groups)
+if (n_leaked > 0) warning("non-NA weight_direct outside direct-match rows: ", n_leaked)
+diagAdd("tables", "weight_direct_check",
+		data.frame(id_obs_groups = nrow(weight_direct_check),
+				   groups_not_summing_to_1 = n_bad_weight_groups, leaked = n_leaked))
+```
+
+```{r add_length_from_opr3}
+# Case 1: forward-fill the next upcoming port-sampling id within each trip.
+# Weight = row's share of the target catch among the EC rows of the trip/id;
+# equal split among EC rows when that catch is 0 (the YFT version gave NaN,
+# and the port sample was lost).
+EC_dat_IDed <- EC_dat_IDed |>
+	group_by(newtrip_id) |>
+	tidyr::fill(id_portsampling, .direction = "up") |>
+	ungroup() |>
+	group_by(newtrip_id, id_portsampling) |>
+	mutate(sum_sp = sum(.data[[sp_n]], na.rm = TRUE),
+		   n_ec   = sum(!is.na(.data[[sp_n]])),
+		   weight_portsampling = case_when(is.na(.data[[sp_n]]) ~ NA_real_,
+		   								sum_sp > 0 ~ .data[[sp_n]] / sum_sp,
+		   								TRUE ~ 1 / n_ec)) |>
+	ungroup() |>
+	dplyr::select(-sum_sp, -n_ec) |>
+	mutate(match_type = ifelse(is.na(match_type) & !is.na(id_portsampling),
+							   "same_continuous_trip-next_portsampling_measure", match_type))
+```
+
+```{r add_length_from_opr4}
+# Case 2: proxy length from other observer measures in the same trip
+trip_proxy <- EC_dat_IDed |>
+	filter(!is.na(id_obs)) |>
+	distinct(newtrip_id, ymd, id_obs, obs_mean_len, obs_count) |>
+	group_by(newtrip_id) |>
+	summarise(proxy_mean_len = sum(obs_mean_len * obs_count, na.rm = TRUE) / sum(obs_count, na.rm = TRUE),
+			  n_id_obs = n_distinct(id_obs),
+			  .groups = "drop")
+
+EC_dat_IDed <- EC_dat_IDed |>
+	left_join(trip_proxy, by = "newtrip_id") |>
+	mutate(match_type = ifelse(is.na(match_type) & !is.na(proxy_mean_len) & is.na(id_portsampling),
+							   "same_continuous_trip-other_observer_measures", match_type))
+
+saveIt(EC_dat_IDed |> dplyr::select(match_type, id_obs, id_portsampling, weight_direct, origin),
+	   "EC_dat_IDed_subsetcols.RDS")
+```
+
+```{r add_length_from_opr5}
+# Record-level result: real measurement (observer or port) kept separate from proxy
+CE_dat_mean_len <- EC_dat_IDed |>
+	left_join(LF_port |> rename(port_mean_len = mean_len, port_count = count) |>
+			  	dplyr::select(id_portsampling, port_mean_len, port_count),
+			  by = "id_portsampling") |>
+	mutate(mean_len = case_when(match_type == "flag-vesselname-date-observer" ~ obs_mean_len,
+								match_type == "same_continuous_trip-next_portsampling_measure" ~ port_mean_len,
+								TRUE ~ NA_real_),
+		   count = case_when(match_type == "flag-vesselname-date-observer" ~ obs_count,
+		   				  match_type == "same_continuous_trip-next_portsampling_measure" ~ port_count * weight_portsampling,
+		   				  TRUE ~ NA_real_),
+		   id = case_when(match_type == "flag-vesselname-date-observer" ~ id_obs,
+		   			   match_type == "same_continuous_trip-next_portsampling_measure" ~ id_portsampling,
+		   			   TRUE ~ NA_character_)) |>
+	dplyr::select(-obs_mean_len, -obs_count, -port_mean_len, -port_count, -n_id_obs) |>
+	filter(!origin %in% c("LF_obs", "LF_port"))
+
+diagAdd("tables", "match_types", as.data.frame(table(match_type = CE_dat_mean_len$match_type, useNA = "ifany")))
+saveIt(CE_dat_mean_len, "CE_dat_mean_len.RDS")
+```
+
+```{r add_length_from_opr6}
+# Monthly aggregation (vessel x month x 1 deg cell).
+# Real length data always takes strict precedence over proxy.
+EC_LF_month <- CE_dat_mean_len |>
+	mutate(ymd_month = make_date(year(ymd), month(ymd), 15)) |>
+	group_by(flag, vesselname, ymd_month, latCent, lonCent) |>
+	summarise(
+		avg_mean_len = sum(mean_len * count, na.rm = TRUE) / sum(count, na.rm = TRUE),
+		avg_proxy_mean_len = mean(proxy_mean_len, na.rm = TRUE),
+		across(all_of(c(n_cols, w_cols, "E")), sum),
+		mean_hbf = mean(hbf[hbf_outlier == "valid"], na.rm = TRUE),
+		n_hbf_valid           = sum(hbf_outlier == "valid", na.rm = TRUE),
+		n_hbf_missing         = sum(hbf_outlier == "missing", na.rm = TRUE),
+		n_hbf_non_positive    = sum(hbf_outlier == "non_positive", na.rm = TRUE),
+		n_hbf_above_threshold = sum(hbf_outlier == "above_threshold", na.rm = TRUE),
+		.groups = "drop") |>
+	mutate(mean_len = ifelse(!is.na(avg_mean_len), avg_mean_len, avg_proxy_mean_len),
+		   len_source = case_when(!is.na(avg_mean_len) ~ "operational_real",
+		   						  !is.na(avg_proxy_mean_len) ~ "operational_proxy",
+		   						  TRUE ~ NA_character_),
+		   # "valid" if at least one record fed mean_hbf; if more than one bad
+		   # category is present, the original category is ambiguous -> "mixed_invalid"
+		   hbf_outlier = case_when(
+		   	n_hbf_valid > 0 ~ "valid",
+		   	(n_hbf_missing > 0) + (n_hbf_non_positive > 0) + (n_hbf_above_threshold > 0) > 1 ~ "mixed_invalid",
+		   	n_hbf_missing > 0 ~ "missing",
+		   	n_hbf_non_positive > 0 ~ "non_positive",
+		   	n_hbf_above_threshold > 0 ~ "above_threshold",
+		   	TRUE ~ NA_character_))
+
+EC_LF_month$total_n <- rowSums(EC_LF_month[, n_cols])
+n_month_before <- nrow(EC_LF_month)
+EC_LF_month <- EC_LF_month |> filter(total_n > 0)
+for (s in species_all) EC_LF_month[[paste0(s, "_fraction")]] <- EC_LF_month[[paste0(s, "_n")]] / EC_LF_month$total_n
+
+EC_LF_month <- EC_LF_month |>
+	rename(latitude = latCent, longitude = lonCent, ymd = ymd_month) |>
+	dplyr::select(-avg_proxy_mean_len) |>
+	mutate(row_id = row_number())
+
+n_ec_total <- nrow(EC_LF_month)
+n_ec_tier1 <- sum(!is.na(EC_LF_month$mean_len))
+diagAdd("tables", "monthly_aggregation",
+		data.frame(records = n_month_before, removed_total_n_0 = n_month_before - n_ec_total))
+```
+
+```{r add_length_from_opr7}
+# Extrapolate missing weights (NA = some fish without weight, see tidyCatch()):
+# n x mean weight per fish of the same month and 5 deg cell, all years pooled.
+# Done for every species, as the delta (raised - operational) uses all weights.
+EC_LF_month <- EC_LF_month |>
+	mutate(lat5 = roundTo2.5(latitude), lon5 = roundTo2.5(longitude), mm = month(ymd))
+key_rec <- paste(EC_LF_month$mm, EC_LF_month$lat5, EC_LF_month$lon5)
+
+w_extrap <- list()
+for (s in species_all) {
+	n <- paste0(s, "_n"); w <- paste0(s, "_w")
+	EC_LF_month[[w]][EC_LF_month[[n]] == 0 & is.na(EC_LF_month[[w]])] <- 0
+	# records with a weight but no number (n set to 0 by tidyCatch()) would
+	# inflate the mean weight per fish: left out of the reference
+	ref <- EC_LF_month |>
+		filter(!is.na(.data[[w]]), .data[[n]] > 0) |>
+		group_by(mm, lat5, lon5) |>
+		summarise(mean_w = ifelse(sum(.data[[n]]) > 0, sum(.data[[w]]) / sum(.data[[n]]), NA_real_),
+				  .groups = "drop")
+	miss <- is.na(EC_LF_month[[w]])
+	idx  <- match(key_rec[miss], paste(ref$mm, ref$lat5, ref$lon5))
+	EC_LF_month[[w]][miss] <- EC_LF_month[[n]][miss] * ref$mean_w[idx]
+	w_extrap[[s]] <- data.frame(species = s, extrapolated = sum(miss),
+								still_na = sum(is.na(EC_LF_month[[w]])))
+}
+diagAdd("tables", "weight_extrapolation", do.call(rbind, w_extrap))
+knitr::kable(.diag$tables$weight_extrapolation, row.names = FALSE,
+			 caption = "Monthly records with missing catch weight, extrapolated from mean weight per fish")
+
+EC_LF_month <- EC_LF_month |> dplyr::select(-lat5, -lon5, -mm)
+saveIt(EC_LF_month, "LL_EC_LF_opr_mm.RDS")
+```
+
+```{r add_length_from_opr8}
+# Rebuild LF-id correspondence at group level (cheaper than list-columns per record)
+real_ids <- CE_dat_mean_len |>
+	filter(!is.na(id)) |>
+	distinct(flag, vesselname, ymd, latCent, lonCent, id) |>
+	mutate(ymd_month = make_date(year(ymd), month(ymd), 15))
+
+proxy_ids <- EC_dat_IDed |>
+	filter(!is.na(id_obs)) |>
+	distinct(newtrip_id, id_obs) |>
+	inner_join(CE_dat_mean_len |> distinct(flag, vesselname, newtrip_id, ymd, latCent, lonCent) |>
+			   	mutate(ymd_month = make_date(year(ymd), month(ymd), 15)),
+			   by = "newtrip_id", relationship = "many-to-many") |>
+	dplyr::select(flag, vesselname, ymd_month, latCent, lonCent, id_obs)
+
+corresp_EC_LF_ids <- EC_LF_month |>
+	dplyr::select(row_id, flag, vesselname, ymd, latitude, longitude) |>
+	left_join(real_ids, by = c("flag", "vesselname", "ymd" = "ymd_month",
+							   "latitude" = "latCent", "longitude" = "lonCent")) |>
+	left_join(proxy_ids, by = c("flag", "vesselname", "ymd" = "ymd_month",
+								"latitude" = "latCent", "longitude" = "lonCent"),
+			  relationship = "many-to-many") |>
+	group_by(row_id) |>
+	summarise(ids = list(unique(na.omit(id))),
+			  proxy_ids = list(unique(na.omit(id_obs))),
+			  .groups = "drop")
+
+saveIt(corresp_EC_LF_ids, "LL_EC_LF_opr_mm_correspIds.RDS")
+```
+
+## Using aggregated LF
+
+```{r add_length_from_agg}
+# 1. Box edges + sea-cell count per unique aggregated-LF rectangle
+LFr_regions <- LF_uniform_bins |>
+	distinct(ASTRAT, latCent, lonCent) |>
+	rename(lat_region = latCent, lon_region = lonCent) |>
+	left_join(astrat_lookup, by = "ASTRAT") |>
+	mutate(lat_from = lat_region - lat_offset, lat_to = lat_region + lat_offset,
+		   lon_from = lon_region - lon_offset, lon_to = lon_region + lon_offset,
+		   nb_cells = (lat_offset * 2) * (lon_offset * 2),
+		   id_region = row_number())
+
+sea_counts <- LFr_regions |>
+	left_join(pmask_lookup,
+			  by = join_by(lat_from <= latCent, lat_to >= latCent,
+			  			 lon_from <= lonCent, lon_to >= lonCent),
+			  relationship = "many-to-many") |>
+	group_by(id_region) |>
+	summarise(n_sea = sum(!is.na(latCent)), .groups = "drop")
+
+# 2. prop_sea + zero-sea guard
+LFr_regions <- LFr_regions |>
+	left_join(sea_counts, by = "id_region") |>
+	mutate(prop_sea = n_sea / nb_cells) |>
+	dplyr::select(-n_sea)
+
+n_zero_sea <- sum(LFr_regions$prop_sea == 0, na.rm = TRUE)
+diagAdd("tables", "LF_regions", data.frame(regions = nrow(LFr_regions), all_land = n_zero_sea))
+# all-land rectangles excluded from weighting to avoid division by zero
+LFr_regions <- LFr_regions |> filter(prop_sea > 0)
+saveIt(LFr_regions, "LFr_regions.RDS")
+
+# 3. Weighted mean length per rectangle (year-specific)
+LFr_mean_len <- LF_uniform_bins |>
+	group_by(ASTRAT, latCent, lonCent, yr, qtr, flag) |>
+	summarise(mean_len = sum(len * count) / sum(count),
+			  count = sum(count),
+			  .groups = "drop") |>
+	left_join(LFr_regions, by = c("ASTRAT", "latCent" = "lat_region", "lonCent" = "lon_region")) |>
+	mutate(weight = count / (nb_cells * prop_sea),
+		   lf_row_id = row_number())
+```
+
+```{r add_length_from_agg2}
+# Dedupe to unique (flag, cell, quarter) combos before the spatial lookup
+CE_notmatched <- EC_LF_month |>
+	filter(is.na(mean_len)) |>
+	dplyr::select(-mean_len) |>
+	mutate(yr = year(ymd), qtr = quarter(ymd))
+
+lookup_keys <- CE_notmatched |> distinct(flag, latitude, longitude, yr, qtr)
+
+joined_year <- lookup_keys |>
+	left_join(LFr_mean_len, by = c("flag", "yr", "qtr"), relationship = "many-to-many") |>
+	filter(lon_from <= longitude, lon_to >= longitude,
+		   lat_from <= latitude, lat_to >= latitude)
+
+matched <- joined_year |>
+	group_by(flag, latitude, longitude, yr, qtr) |>
+	summarise(n_measures_from_raised = n(),
+			  mean_len = sum(mean_len * weight) / sum(weight),
+			  .groups = "drop")
+
+n_lf_total_yr <- nrow(LFr_mean_len)
+n_lf_used_yr  <- n_distinct(joined_year$lf_row_id)
+
+CE_notmatched <- CE_notmatched |>
+	left_join(matched, by = c("flag", "latitude", "longitude", "yr", "qtr")) |>
+	mutate(len_source = ifelse(!is.na(mean_len), "aggregated_year", NA_character_))
+n_ec_tier2 <- sum(!is.na(CE_notmatched$mean_len))
+
+EC_LF_mm <- EC_LF_month |>
+	filter(!is.na(mean_len)) |>
+	bind_rows(CE_notmatched |> dplyr::select(all_of(names(EC_LF_month)))) |>
+	arrange(row_id)
+```
+
+## Using aggregated LF averaged across years (fallback)
+
+```{r add_length_from_agg_acrossyears}
+# Same weighting as LFr_mean_len, grouped without `yr`: length data from any
+# year in the same flag/region/quarter fills records whose year has no LF.
+LFr_mean_len_allyr <- LF_uniform_bins |>
+	group_by(ASTRAT, latCent, lonCent, qtr, flag) |>
+	summarise(mean_len = sum(len * count) / sum(count),
+			  count = sum(count),
+			  .groups = "drop") |>
+	left_join(LFr_regions, by = c("ASTRAT", "latCent" = "lat_region", "lonCent" = "lon_region")) |>
+	mutate(weight = count / (nb_cells * prop_sea),
+		   lf_row_id = row_number())
+
+CE_notmatched_allyr <- EC_LF_mm |>
+	filter(is.na(mean_len)) |>
+	dplyr::select(-mean_len) |>
+	mutate(qtr = quarter(ymd))
+
+lookup_keys_allyr <- CE_notmatched_allyr |> distinct(flag, latitude, longitude, qtr)
+
+joined_allyr <- lookup_keys_allyr |>
+	left_join(LFr_mean_len_allyr, by = c("flag", "qtr"), relationship = "many-to-many") |>
+	filter(lon_from <= longitude, lon_to >= longitude,
+		   lat_from <= latitude, lat_to >= latitude)
+
+matched_allyr <- joined_allyr |>
+	group_by(flag, latitude, longitude, qtr) |>
+	summarise(n_measures_from_raised = n(),
+			  mean_len = sum(mean_len * weight) / sum(weight),
+			  .groups = "drop")
+
+n_lf_total_allyr <- nrow(LFr_mean_len_allyr)
+n_lf_used_allyr  <- n_distinct(joined_allyr$lf_row_id)
+
+CE_notmatched_allyr <- CE_notmatched_allyr |>
+	left_join(matched_allyr, by = c("flag", "latitude", "longitude", "qtr")) |>
+	mutate(len_source = ifelse(!is.na(mean_len), "aggregated_allyear", len_source)) |>
+	dplyr::select(all_of(names(EC_LF_mm)))
+n_ec_tier3 <- sum(!is.na(CE_notmatched_allyr$mean_len))
+
+EC_LF_mm <- EC_LF_mm |>
+	filter(!is.na(mean_len)) |>
+	bind_rows(CE_notmatched_allyr) |>
+	arrange(row_id)
+
+saveIt(EC_LF_mm, "LL_EC_LF_mm.RDS")
+```
+
+## Coverage summary
+
+```{r coverage_summary}
+diagAdd("tables", "lf_coverage", tibble::tibble(
+	Tier = c("Tier 1 (operational LF, direct/proxy match)",
+			 "Tier 2 (aggregated LF, year-specific)",
+			 "Tier 3 (aggregated LF, all years)",
+			 "No length"),
+	N_matched = c(n_ec_tier1, n_ec_tier2, n_ec_tier3,
+				  n_ec_total - n_ec_tier1 - n_ec_tier2 - n_ec_tier3),
+	N_total = n_ec_total) |>
+	mutate(Pct = round(100 * N_matched / N_total, 1),
+		   Pct_cumulative = c(cumsum(Pct[1:3]), NA)))
+knitr::kable(.diag$tables$lf_coverage, caption = paste("Monthly operational records with a", species, "mean length, by matching tier"))
+
+diagAdd("tables", "lf_usage", data.frame(
+	source = c("aggregated LF, year-specific", "aggregated LF, all years"),
+	lf_entries = c(n_lf_total_yr, n_lf_total_allyr),
+	used = c(n_lf_used_yr, n_lf_used_allyr)) |>
+	mutate(pct_used = round(100 * used / lf_entries, 1)))
+knitr::kable(.diag$tables$lf_usage, caption = "Aggregated LF entries matched to at least one EC record")
+```
+
+```{r save_diagnostics}
+diagnostics <- list(
+	species = species, request_tag = request_tag, rendered = Sys.time(),
+	steps = stepsTable(),
+	messages = .diag$messages,
+	tables = .diag$tables)
+saveIt(diagnostics, "LL_processing_diagnostics.RDS")
+```
