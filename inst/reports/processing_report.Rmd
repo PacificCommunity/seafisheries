@@ -1,0 +1,209 @@
+---
+title: "`r params$title`"
+output:
+  pdf_document:
+    toc: true
+    number_sections: true
+geometry: margin=1.8cm
+fontsize: 10pt
+header-includes:
+  - \usepackage{booktabs}
+  - \usepackage{longtable}
+params:
+  diag: NULL
+  title: "Data processing diagnostics"
+  source_file: ""
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+					  fig.align = "center", fig.width = 7.5)
+library(ggplot2)
+diag <- params$diag
+
+steps <- diag$steps
+# a chunk run twice appends its steps twice: keep the last run of each step
+steps <- steps[!duplicated(paste(steps$dataset, steps$step), fromLast = TRUE), ]
+steps$removed <- steps$n_in - steps$n_out
+steps$pct_removed <- ifelse(steps$n_in > 0, 100 * steps$removed / steps$n_in, NA)
+steps$reason <- if ("why" %in% names(steps)) steps$why else seafisheries:::step_reason(steps$step)
+datasets <- unique(steps$dataset)
+# section titles for the dataset keys used by the workflows
+ds_labels <- c(captain = "Captain logbooks", observer = "Observer logbooks",
+			   raised = "Raised catch and effort", LF_opr = "Operational length frequency",
+			   LF_port = "Port sampling lengths", LF_obs = "Observer lengths",
+			   LF_agg = "Aggregated length frequency")
+ds_label <- function(ds) ifelse(ds %in% names(ds_labels), ds_labels[ds], ds)
+# selection steps (other species, gears, data sources) are not data loss
+steps$selection <- grepl("sp_code|SP_ID", steps$step)
+
+# titles and notes for the tables outside the dataset sections
+table_info <- list(
+	merge_cap_obs = c("Merging captain and observer records",
+		"Captain records matching an observer record (flag, vessel, day, 1 deg cell) are removed: the observer record is kept."),
+	catch_unknown_opr = c("Species recorded with neither number nor weight",
+		"Operational records; the catch of these species is unknown and set to 0."),
+	na_weight_opr = c("Missing weights after merging",
+		"Partial weights set to NA, extrapolated after the monthly aggregation."),
+	raised_shared_strata = c("Raised records sharing a stratum",
+		"Records with the same flag, fleet, month and 5 deg cell (merged by the old SQL query)."),
+	LF_agg_fish = c("Aggregated LF: rows and fish",
+		"process_lf_data() merges rows of a sample with the same length, so rows drop more than fish."),
+	LF_opr_agg = c("Operational length samples", "Fish measured, aggregated to one record per sample id and day."),
+	weight_direct_check = c("Observer length weights", "Each observer sample must be split across its catch records with weights summing to 1."),
+	match_types = c("How operational records got a length", "NA: no operational length; filled from aggregated LF if possible."),
+	monthly_aggregation = c("Monthly aggregation", "Records per vessel x month x 1 deg cell; removed: no catch of any species."),
+	weight_extrapolation = c("Weight extrapolation", "Monthly records with a missing weight, filled with n x mean weight per fish (same month and 5 deg cell)."),
+	LF_regions = c("Aggregated LF regions", "Regions entirely on land are excluded from the length weighting."),
+	lf_coverage = c("Source of the mean length", "Monthly operational records by matching tier."),
+	lf_usage = c("Aggregated LF used", "Aggregated LF entries matched to at least one operational record.")
+)
+
+fmt_n <- function(x) format(x, big.mark = ",", scientific = FALSE, trim = TRUE)
+
+# latex table as text, to cat() in results = "asis" chunks; long text columns
+# wrapped with p{} widths
+tab <- function(df, caption = NULL, widths = NULL, digits = 2) {
+	if (is.null(df) || !is.data.frame(df) || nrow(df) == 0 || ncol(df) == 0) {
+		return("\n\n\\emph{Nothing to report.}\n\n")
+	}
+	align <- if (is.null(widths)) NULL else ifelse(is.na(widths), "l", paste0("p{", widths, "}"))
+	knitr::kable(df, format = "latex", booktabs = TRUE, longtable = TRUE, row.names = FALSE,
+				 caption = caption, digits = digits, align = align,
+				 format.args = list(big.mark = ","), escape = TRUE) |>
+		paste(collapse = "\n") |>
+		(\(x) paste0("\n\n", x, "\n\n"))()
+}
+
+tables <- diag$tables
+used_tables <- character(0)
+tables_for <- function(ds, prefix) {
+	key <- gsub(" ", "_", ds)
+	nm <- names(tables)[startsWith(names(tables), paste0(prefix, "_", key))]
+	used_tables <<- c(used_tables, nm)
+	nm
+}
+```
+
+Source: `r gsub("_", "\\\\_", params$source_file)`
+Species: **`r diag$species`**, SQL download: `r diag$request_tag`, processed: `r format(diag$rendered, "%Y-%m-%d %H:%M")`.
+
+# Overview
+
+Records entering and leaving the cleaning steps of each dataset. Selected:
+records of the species, gear and data sources processed (not counted as
+losses, nor shown in the plot). Steps that
+only transform values (coordinate conversion, HBF flags, length codes) remove
+nothing. Records removed by later steps of the workflow (merging, aggregation)
+are covered in "Other checks".
+
+```{r overview, results = "asis"}
+ov <- do.call(rbind, lapply(datasets, function(ds) {
+	s <- steps[steps$dataset == ds, ]
+	sel <- s[s$selection, ]
+	n_sel <- if (nrow(sel)) sel$n_out[nrow(sel)] else s$n_in[1]
+	data.frame(Dataset = ds, Downloaded = s$n_in[1], Selected = n_sel, Cleaned = s$n_out[nrow(s)],
+			   `Retained (% of selected)` = round(100 * s$n_out[nrow(s)] / n_sel, 2), check.names = FALSE)
+}))
+cat(tab(ov))
+```
+
+```{r removed_plot, fig.height = 0.25 * max(8, sum(steps$removed > 0 & !steps$selection)) + 1.5}
+p <- steps[steps$removed > 0 & !steps$selection, ]
+if (nrow(p)) {
+	p$label <- paste0(p$step, "  (", fmt_n(p$removed), ")")
+	p$label <- factor(p$label, levels = rev(unique(p$label)))
+	p$dataset <- factor(p$dataset, levels = datasets)
+	ggplot(p, aes(x = pct_removed, y = label)) +
+		geom_col(fill = "grey40", width = 0.7) +
+		facet_grid(dataset ~ ., scales = "free_y", space = "free_y") +
+		labs(x = "Records removed (% of records entering the step)", y = NULL,
+			 title = "Records removed per step") +
+		theme_bw(base_size = 9) +
+		theme(strip.text.y = element_text(angle = 0), strip.background = element_blank())
+}
+```
+
+# Warnings
+
+```{r warnings, results = "asis"}
+w <- diag$warnings
+if (is.null(w) || length(w) == 0) {
+	cat("No warnings recorded.\n")
+} else {
+	for (n in names(w)) cat("- **", gsub("_", "\\\\_", n), "**: ",
+							gsub("_", "\\\\_", paste(unique(w[[n]]), collapse = "; ")), "\n", sep = "")
+}
+```
+
+```{r datasets, results = "asis"}
+for (ds in datasets) {
+	cat("\n\n# ", ds_label(ds), "\n\n", sep = "")
+
+	s <- steps[steps$dataset == ds, ]
+	cat("## Cleaning steps\n\n")
+	cat(tab(data.frame(Step = s$step, In = fmt_n(s$n_in), Out = fmt_n(s$n_out),
+						 Removed = fmt_n(s$removed), `%` = round(s$pct_removed, 2),
+						 Reason = s$reason, check.names = FALSE),
+			  widths = c("4cm", NA, NA, NA, NA, "6.5cm")))
+
+	for (nm in tables_for(ds, "stage")) {
+		cat("\n\n## Input vs processed\n\n")
+		cat("Input: values in the raw data (% of raw records with a value). ",
+			"Processed: % of raw records (or ids) still present, with a value, after cleaning.\n\n")
+		cat(tab(tables[[nm]], widths = c("2.8cm", "3.2cm", "2.4cm", "3.2cm", "2.6cm")))
+	}
+	for (nm in tables_for(ds, "catch_quality")) {
+		cat("\n\n## Catch quality (raw)\n\n")
+		cat("Records where the species is recorded, and where its number or weight is missing on all (or some) of its catch lines. ",
+			"Missing numbers count as 0 fish; missing weights are extrapolated from the mean weight per fish.\n\n")
+		cat(tab(tables[[nm]][, setdiff(names(tables[[nm]]), "dataset")]))
+	}
+	for (nm in tables_for(ds, "coords")) {
+		sfx <- sub(paste0("coords_", gsub(" ", "_", ds), "_?"), "", nm)
+		cat("\n\n## Coordinates that could not be converted", if (nzchar(sfx)) paste0(" (", sfx, ")"), "\n\n", sep = "")
+		cat("Counts are distinct raw values, not records. These positions become NA.\n\n")
+		cat(tab(tables[[nm]], widths = c(NA, NA, NA, "7cm")))
+	}
+}
+```
+
+```{r other, results = "asis"}
+other <- setdiff(names(tables), used_tables)
+if (length(other)) {
+	cat("\n\n# Other checks\n\n")
+	for (nm in other) {
+		info <- table_info[[nm]]
+		cat("\n\n## ", if (is.null(info)) gsub("_", " ", nm) else info[1], "\n\n", sep = "")
+		if (!is.null(info)) cat(info[2], "\n\n")
+		w <- if (startsWith(nm, "stage_")) c("2.8cm", "3.2cm", "2.4cm", "3.2cm", "2.6cm") else
+			 if (startsWith(nm, "coords_")) c(NA, NA, NA, "7cm") else NULL
+		cat(tab(tables[[nm]], widths = w))
+	}
+}
+```
+
+```{r lf_plot, fig.height = 2.5}
+cov <- tables$lf_coverage
+if (!is.null(cov) && all(c("Tier", "Pct") %in% names(cov))) {
+	cov$Tier <- factor(cov$Tier, levels = rev(cov$Tier))
+	ggplot(cov, aes(x = Pct, y = Tier)) +
+		geom_col(fill = "grey40", width = 0.6) +
+		geom_text(aes(label = paste0(Pct, "%")), hjust = -0.1, size = 3) +
+		scale_x_continuous(limits = c(0, 100), expand = expansion(mult = c(0, 0.05))) +
+		labs(x = "Monthly operational records (%)", y = NULL, title = "Source of the mean length") +
+		theme_bw(base_size = 9)
+}
+```
+
+\newpage
+
+# Appendix: console output of each step
+
+```{r messages, results = "asis"}
+for (n in names(diag$messages)) {
+	cat("\n\n**", gsub("_", "\\\\_", n), "**\n\n", sep = "")
+	txt <- unlist(lapply(diag$messages[[n]], function(l) if (nchar(l) > 100) strwrap(l, 100, exdent = 4) else l))
+	cat("```\n", paste(txt, collapse = "\n"), "\n```\n", sep = "")
+}
+```
