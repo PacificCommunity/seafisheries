@@ -32,7 +32,7 @@ datasets <- unique(steps$dataset)
 ds_labels <- c(captain = "Captain logbooks", observer = "Observer logbooks",
 			   raised = "Raised catch and effort", LF_opr = "Operational length frequency",
 			   LF_port = "Port sampling lengths", LF_obs = "Observer lengths",
-			   LF_agg = "Aggregated length frequency")
+			   LF_agg = "Aggregated length frequency", hampel = "Hampel filter")
 ds_label <- function(ds) ifelse(ds %in% names(ds_labels), ds_labels[ds], ds)
 # selection steps (other species, gears, data sources) are not data loss
 steps$selection <- grepl("sp_code|SP_ID", steps$step)
@@ -53,6 +53,30 @@ table_info <- list(
 	weight_direct_check = c("Observer length weights", "Each observer sample must be split across its catch records with weights summing to 1."),
 	match_types = c("How operational records got a length", "NA: no operational length; filled from aggregated LF if possible."),
 	monthly_aggregation = c("Monthly aggregation", "Records per vessel x month x 1 deg cell; removed: no catch of any species."),
+	settings = c("Settings", ""),
+	input_check = c("Clustering variables vs the clustering data",
+		"Complete records of the fit years scaled with the saved clustering parameters: expected mean 0 and sd 1. A departure means a variable is not built as in the data the clustering was fitted on."),
+	label_map = c("Cluster numbers", "Saved cluster number, after merging, and fishery number."),
+	assignment_accuracy = c("Assignment accuracy",
+		"Reference records (complete, fit years) assigned by discriminant analysis, compared with their k-means fishery. Share of effort."),
+	assignment_by_fishery = c("Assignment without HBF, per fishery", "Recall: share of the fishery's effort assigned to it; precision: share of the effort assigned to it that belongs to it."),
+	assignment_confusion = c("Assignment without HBF: confusion", "k-means fishery in rows, assigned in columns, share of effort."),
+	assignment_by_flag = c("Assignment without HBF, per flag", ""),
+	opr_fisheries = c("Operational fisheries", "low_prob: records assigned with a probability below 0.8."),
+	strata_accuracy = c("Raised-like records: accuracy", "Reference records aggregated to flag x month x 5 deg strata and assigned."),
+	strata_by_purity = c("Raised-like records: accuracy by purity", "Purity: effort share of the stratum's main fishery."),
+	strata_by_fishery = c("Raised-like records: per fishery", ""),
+	opr_prior_tiers = c("Prior used for the operational records without HBF", ""),
+	rai_prior_tiers = c("Prior used for the raised records", ""),
+	rai_fisheries = c("Raised records by fishery", "NA: records without catch in numbers."),
+	delta_summary = c("Delta records", "unassigned: delta in cells where no raised record could be assigned, left out of the outputs."),
+	delta_by_flag = c("Delta per flag", "Catch of the species (mt): clipped = cells where operational > raised."),
+	delta_by_year = c("Delta per year", ""),
+	lf_routing_structural = c("Length routing: structural checks", "Must all be 0."),
+	lf_routing_conservation = c("Length routing: conservation", "Fish measured vs routed to an operational fishery."),
+	lf_routing_unmatched = c("Length samples never matched", ""),
+	lf_raised_routing = c("Aggregated lengths routed to a fishery", ""),
+	fisheries = c("Fisheries", "After the Hampel filter."),
 	weight_extrapolation = c("Weight extrapolation", "Monthly records with a missing weight, filled with n x mean weight per fish (same month and 5 deg cell)."),
 	LF_regions = c("Aggregated LF regions", "Regions entirely on land are excluded from the length weighting."),
 	lf_coverage = c("Source of the mean length", "Monthly operational records by matching tier."),
@@ -67,6 +91,9 @@ tab <- function(df, caption = NULL, widths = NULL, digits = 2) {
 	if (is.null(df) || !is.data.frame(df) || nrow(df) == 0 || ncol(df) == 0) {
 		return("\n\n\\emph{Nothing to report.}\n\n")
 	}
+	# identifiers and years: no thousands separator
+	for (v in intersect(names(df), c("yr", "year", "decade", "f", "cluster", "kmeans")))
+		df[[v]] <- as.character(df[[v]])
 	align <- if (is.null(widths)) NULL else ifelse(is.na(widths), "l", paste0("p{", widths, "}"))
 	knitr::kable(df, format = "latex", booktabs = TRUE, longtable = TRUE, row.names = FALSE,
 				 caption = caption, digits = digits, align = align,
