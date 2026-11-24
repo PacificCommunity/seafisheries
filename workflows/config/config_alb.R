@@ -67,7 +67,10 @@ assign_prior_min_n <- 30
 assign_fit_years   <- NULL                 # NULL = fit years of the clustering
 
 # Delta (raised - operational)
-thr_E <- 1                                 # delta records with effort <= thr_E removed
+assign_delta_group    <- c("flag", "year") # reconciliation: operational + delta = raised per group
+assign_delta_coverage <- 0.2               # min logbook share of a cell's raised effort to split
+                                           # its delta like the logbook fisheries
+thr_E <- 1                                 # delta cells with effort <= thr_E set aside as dummy
 
 # Length frequency outputs: lengths outside are capped to the bounds, and the
 # length bins of the SEAPODYM files will be min_len:max_len.

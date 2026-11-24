@@ -376,23 +376,37 @@ knitr::kable(rai_summary, caption = paste0("Raised records by fishery (NA: no ca
 
 ## Delta: raised minus operational
 
-Computed per flag x month x 5 deg cell. Each cell takes the fishery with the
-most assigned raised effort; `purity` is that fishery's share of the assigned
-raised effort. Delta fisheries are numbered after the operational ones
-(`nb_f_opr` + fishery).
+The delta is the raised catch and effort missing from the operational
+records, per flag x month x 5 deg cell. The operational side is exactly the
+operational fishery records above, so that the outputs add up.
+
+1. Reconciliation, per flag x year and per variable (effort, each catch
+   column): cells where the logbooks exceed the raised data reduce the delta
+   of the other cells of the flag-year, so that operational + delta = raised.
+   Flag-years where the logbooks exceed the raised total get no delta; the
+   logbooks are kept and the excess is reported.
+2. Cells with a delta but delta effort <= `thr_E` are set aside as dummy
+   (no effort to attach a catch rate to); they count in the totals.
+3. Fishery: where the logbooks cover at least `assign_delta_coverage` of the
+   cell's raised effort, the delta is split like the logbook fisheries of the
+   cell (effort shares for effort, catch shares for catch). Elsewhere it
+   takes the fishery with the most assigned raised effort in the cell.
+   Delta fisheries are numbered after the operational ones (`nb_f_opr` + fishery).
 
 ```{r delta}
 catch_cols <- as.vector(outer(species_all, c("_n", "_w"), paste0))
+vars_d <- c("E", catch_cols)
 key <- c("flag", "latCent", "lonCent", "ymd")
 
-EC_opr <- inp("LL_EC_opr.RDS")
-EC_opr_agg <- EC_opr |>
-	mutate(ymd = make_date(year(ymd), month(ymd), 15),
-		   latCent = roundTo2.5(latCent), lonCent = roundTo2.5(lonCent)) |>
-	group_by(across(all_of(key))) |>
-	summarise(across(c(E, all_of(catch_cols)), ~ sum(.x, na.rm = TRUE)), .groups = "drop")
+# operational fishery records at the raised resolution
+opr_f5 <- opr |>
+	filter(!is.na(f)) |>
+	mutate(latCent = roundTo2.5(latitude), lonCent = roundTo2.5(longitude),
+		   ymd = make_date(year(ymd), month(ymd), 15)) |>
+	group_by(across(all_of(c(key, "f")))) |>
+	summarise(across(all_of(vars_d), ~ sum(.x, na.rm = TRUE)), .groups = "drop")
 
-# majority fishery of each cell, from the assigned raised records
+# fishery of each raised cell: the one with the most assigned raised effort
 maj <- rai |>
 	filter(!is.na(cluster)) |>
 	group_by(across(all_of(key)), cluster) |>
@@ -402,94 +416,103 @@ maj <- rai |>
 	ungroup() |>
 	dplyr::select(-E_f)
 
-# every raised record counts in the totals, assigned or not
-EC_rai_agg <- rai |>
-	group_by(across(all_of(key))) |>
-	summarise(across(c(E, all_of(catch_cols)), ~ sum(.x, na.rm = TRUE)), .groups = "drop") |>
-	left_join(maj, by = key)
+rec <- reconcile_delta(raised = rai, operational = opr_f5, key = key, vars = vars_d,
+					   group = assign_delta_group, effort_col = "E", thr_E = thr_E)
 
-merged_data <- full_join(EC_rai_agg, EC_opr_agg, by = key, suffix = c("_rai", "_opr")) |>
-	mutate(across(ends_with(c("_rai", "_opr")), ~ replace(.x, is.na(.x), 0)))
+EC_delta_dummy <- rec$cells |> filter(type == "dummy")
+delta_split <- split_delta(rec$cells |> filter(type == "delta"),
+						   operational = opr_f5 |> rename(cluster = f),
+						   raised_fishery = maj, key = key, vars = vars_d,
+						   coverage_threshold = assign_delta_coverage)
 
-EC_delta_full <- merged_data
-for (v in c("E", catch_cols))
-	EC_delta_full[[v]] <- pmax(0, EC_delta_full[[paste0(v, "_rai")]] - EC_delta_full[[paste0(v, "_opr")]])
-EC_delta_full <- EC_delta_full |>
-	dplyr::select(all_of(key), E, all_of(catch_cols), cluster, purity)
-EC_delta_full$total_n <- rowSums(EC_delta_full[, paste0(species_all, "_n")])
-EC_delta_full$total_w <- rowSums(EC_delta_full[, paste0(species_all, "_w")])
+# no fishery: no logbook mix and no assigned raised record in the cell
+EC_delta_unassigned <- delta_split |> filter(is.na(cluster))
 
-# no effort delta to attach a rate to
-EC_delta_dummy <- EC_delta_full |> filter(E <= 0) |> dplyr::select(-cluster, -purity)
-# delta in a cell where no raised record could be assigned
-EC_delta_unassigned <- EC_delta_full |> filter(E > thr_E, total_n > 0 | total_w > 0, is.na(cluster))
-
-EC_f_raidelta <- EC_delta_full |>
-	filter(E > thr_E, total_n > 0 | total_w > 0, !is.na(cluster)) |>
+EC_f_raidelta <- delta_split |>
+	filter(!is.na(cluster)) |>
 	mutate(qtr = quarter(ymd), latitude = latCent, longitude = lonCent,
 		   f = nb_f_opr + as.numeric(cluster),
 		   row_id = row_number())
+EC_f_raidelta$total_n <- rowSums(EC_f_raidelta[, paste0(species_all, "_n")])
+EC_f_raidelta$total_w <- rowSums(EC_f_raidelta[, paste0(species_all, "_w")])
 for (s in species_all)
 	EC_f_raidelta[[paste0(s, "_fraction")]] <- ifelse(EC_f_raidelta$total_w > 0,
 		EC_f_raidelta[[paste0(s, "_w")]] / EC_f_raidelta$total_w,
-		EC_f_raidelta[[paste0(s, "_n")]] / EC_f_raidelta$total_n)
-
-diagAdd("tables", "delta_summary", data.frame(
-	raised_cells = nrow(EC_rai_agg), delta_records = nrow(EC_f_raidelta),
-	pct_of_raised_cells = round(100 * nrow(EC_f_raidelta) / nrow(EC_rai_agg), 2),
-	dummy_E0 = nrow(EC_delta_dummy), unassigned = nrow(EC_delta_unassigned),
-	unassigned_catch = round(sum(EC_delta_unassigned[[sp_w]]), 1)))
-if (nrow(EC_delta_unassigned))
-	diagWarn("delta", nrow(EC_delta_unassigned), " delta records in cells without an assigned raised record (",
-			 round(sum(EC_delta_unassigned[[sp_w]]), 1), " mt of ", species, "): not in the outputs")
-knitr::kable(.diag$tables$delta_summary, caption = "Delta records")
+		ifelse(EC_f_raidelta$total_n > 0, EC_f_raidelta[[paste0(s, "_n")]] / EC_f_raidelta$total_n, NA_real_))
 
 saveIt(EC_f_raidelta, "LL_EC_f_raidelta.RDS")
 saveIt(EC_delta_dummy, "LL_EC_raidelta_dummy.RDS")
 saveIt(EC_delta_unassigned, "LL_EC_raidelta_unassigned.RDS")
+saveIt(rec$groups, "LL_delta_groups.RDS")
 ```
 
 ```{r delta_diag}
-# Clipping (operational > raised in a cell, delta set to 0) and catch lost to
-# the row filter (positive delta catch in a dropped row)
-w_rai <- paste0(sp_w, "_rai"); w_opr <- paste0(sp_w, "_opr")
-diag_d <- merged_data |>
-	mutate(yr = year(ymd),
-		   w_delta = pmax(0, .data[[w_rai]] - .data[[w_opr]]),
-		   E_delta = pmax(0, E_rai - E_opr),
-		   kept = E_delta > thr_E & !is.na(cluster),
-		   clipped = .data[[w_rai]] < .data[[w_opr]],
-		   dropped = w_delta > 0 & !kept)
+# Totals: raised vs operational + delta + dummy (+ unassigned), for effort and
+# the species catch
+tot <- function(d, v) sum(d[[v]], na.rm = TRUE)
+check_tot <- do.call(rbind, lapply(c("E", sp_n, sp_w), function(v) {
+	g <- rec$groups[rec$groups$variable == v, ]
+	data.frame(variable = v, raised = tot(rai, v), operational = tot(opr_f5, v),
+			   delta = tot(EC_f_raidelta, v), unassigned = tot(EC_delta_unassigned, v),
+			   dummy = tot(EC_delta_dummy, v), overshoot = sum(g$overshoot))
+})) |>
+	mutate(outputs = operational + delta + unassigned + dummy,
+		   difference = outputs - raised,
+		   difference_minus_overshoot = round(difference - overshoot, 3))
+if (any(abs(check_tot$difference_minus_overshoot) > 1e-6 * pmax(1, check_tot$raised)))
+	diagWarn("delta", "operational + delta + dummy differs from raised beyond the reported overshoot")
+diagAdd("tables", "delta_totals", check_tot)
+knitr::kable(check_tot, digits = 1, caption = paste0(
+	"Totals (effort in hundreds of hooks, ", species, " catch in numbers and mt): outputs - raised = overshoot (flag-years where the logbooks exceed raised)"))
 
-delta_by <- function(d) d |>
-	summarise(cells = n(),
-			  raised = sum(.data[[w_rai]]), operational = sum(.data[[w_opr]]),
-			  pct_cells_clipped = 100 * mean(clipped),
-			  excess_opr = sum(pmax(0, .data[[w_opr]] - .data[[w_rai]])),
-			  dropped = sum(w_delta[dropped]),
-			  pct_dropped_of_raised = 100 * dropped / raised, .groups = "drop")
-flag_summary <- bind_rows(diag_d |> group_by(flag) |> delta_by() |> arrange(desc(raised)),
-						  diag_d |> delta_by() |> mutate(flag = "TOTAL"))
-year_summary <- diag_d |> group_by(yr) |> delta_by()
+# Overshoot: flag-years where the logbooks exceed the raised data
+os <- rec$groups |> filter(variable == sp_w, overshoot > 0) |>
+	arrange(desc(overshoot)) |>
+	dplyr::select(flag, year, raised, operational, overshoot)
+diagAdd("tables", "delta_overshoot", as.data.frame(os))
+if (nrow(os))
+	diagWarn("delta", nrow(os), " flag-years where the logbooks exceed the raised ", species, " catch (",
+			 round(sum(os$overshoot), 1), " mt in total): logbooks kept, no delta")
+knitr::kable(head(os, 30), digits = 1, caption = paste0(
+	"Flag-years where the logbook ", species, " catch exceeds the raised catch (30 largest)"))
+
+# How the delta got its fishery
+src <- delta_split |>
+	mutate(delta_source = ifelse(is.na(delta_source), "unassigned", delta_source)) |>
+	group_by(delta_source) |>
+	summarise(cells = n_distinct(paste(flag, latCent, lonCent, ymd)), effort = sum(E),
+			  catch = sum(.data[[sp_w]]), .groups = "drop") |>
+	mutate(catch_share = round(catch / sum(catch), 4))
+diagAdd("tables", "delta_sources", as.data.frame(src))
+knitr::kable(src, digits = 1, caption = paste0(
+	"Delta by origin of its fishery (catch: ", species, ", mt); logbook mix from coverage >= ",
+	assign_delta_coverage))
+
+# Per flag and per year
+by_g <- function(cols) {
+	r <- rai |> mutate(year = year(ymd)) |> group_by(across(all_of(cols))) |>
+		summarise(raised = sum(.data[[sp_w]], na.rm = TRUE), .groups = "drop")
+	o <- opr_f5 |> mutate(year = year(ymd)) |> group_by(across(all_of(cols))) |>
+		summarise(operational = sum(.data[[sp_w]]), .groups = "drop")
+	d <- EC_f_raidelta |> mutate(year = year(ymd)) |> group_by(across(all_of(cols))) |>
+		summarise(delta = sum(.data[[sp_w]]), .groups = "drop")
+	u <- bind_rows(EC_delta_dummy, EC_delta_unassigned) |> mutate(year = year(ymd)) |>
+		group_by(across(all_of(cols))) |>
+		summarise(dummy_unassigned = sum(.data[[sp_w]]), .groups = "drop")
+	full_join(r, o, by = cols) |> full_join(d, by = cols) |> full_join(u, by = cols) |>
+		mutate(across(c(raised, operational, delta, dummy_unassigned), ~ replace(.x, is.na(.x), 0)),
+			   overshoot = operational + delta + dummy_unassigned - raised)
+}
+flag_summary <- by_g("flag") |> arrange(desc(raised))
+year_summary <- by_g("year")
 diagAdd("tables", "delta_by_flag", as.data.frame(flag_summary))
 diagAdd("tables", "delta_by_year", as.data.frame(year_summary))
-knitr::kable(flag_summary, digits = 1, caption = paste0(
-	species, " catch (mt) per flag: raised, operational, share of cells where operational > raised (clipped), ",
-	"operational excess, delta catch dropped by the row filter"))
-
-plot_fisheries_map(diag_d |> group_by(latCent, lonCent) |>
-				   	summarise(pct = 100 * sum(w_delta[dropped]) / sum(.data[[w_rai]]), .groups = "drop"),
-				   fill_col = "pct", fill_label = paste("% of raised", species, "catch dropped"),
-				   lat_col = "latCent", lon_col = "lonCent", tile_width = 5, tile_height = 5)
+knitr::kable(flag_summary, digits = 1, caption = paste0(species, " catch (mt) per flag"))
 
 bind_rows(
-	inp("LL_EC_rai.RDS") |> mutate(yr = year(ymd)) |> group_by(yr) |>
-		summarise(C = sum(.data[[sp_w]], na.rm = TRUE), .groups = "drop") |> mutate(source = "Raised"),
-	bind_rows(EC_f_opr |> dplyr::select(yr, C),
-			  EC_f_raidelta |> mutate(yr = year(ymd), C = .data[[sp_w]]) |> dplyr::select(yr, C)) |>
-		group_by(yr) |> summarise(C = sum(C, na.rm = TRUE), .groups = "drop") |>
-		mutate(source = "Operational + delta")) |>
-	ggplot(aes(x = yr, y = C, colour = source)) +
+	year_summary |> transmute(year, C = raised, source = "Raised"),
+	year_summary |> transmute(year, C = operational + delta + dummy_unassigned, source = "Operational + delta")) |>
+	ggplot(aes(x = year, y = C, colour = source)) +
 	geom_line() +
 	labs(x = "Year", y = paste(species, "catch (mt)"), colour = NULL) +
 	theme_minimal()
