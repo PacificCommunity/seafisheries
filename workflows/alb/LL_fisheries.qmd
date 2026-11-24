@@ -687,7 +687,7 @@ plot_cpue_ts <- function(d, title) {
 	ggplot(d, aes(x = yr, y = CPUE)) +
 		geom_line() +
 		geom_point(size = 0.6) +
-		facet_wrap(~ fishery, ncol = 3)+#, scales = "free_y") +
+		facet_wrap(~ fishery, ncol = 3, scales = "free_y") +
 		labs(x = "Year", y = paste(species, "CPUE (mt / 100 hooks)"), title = title) +
 		theme_bw(base_size = 8) +
 		theme(strip.background = element_blank())
@@ -695,7 +695,7 @@ plot_cpue_ts <- function(d, title) {
 ```
 
 ```{r cpue_ts_opr, fig.width = 7.5, fig.height = 6}
-plot_cpue_ts(cpue_year |> filter(f <= nb_f_opr, f %in% c(1,2,4,5,7)), "Operational fisheries")
+plot_cpue_ts(cpue_year |> filter(f <= nb_f_opr), "Operational fisheries")
 ```
 
 ```{r cpue_ts_delta, fig.width = 7.5, fig.height = 6}

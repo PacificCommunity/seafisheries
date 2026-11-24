@@ -94,6 +94,7 @@ step_reason <- function(step) {
 		"convert length codes"     = "Lengths measured as SD/US/PS converted to UF. No record removed.",
 		"len_code"                 = "Length code still not UF after inference and conversion.",
 		"bounding box|filter_bounding_box" = "Outside the latitude/longitude range of the model.",
+		"extrapolate missing weights" = "Missing weights: number x mean weight per fish of raised records (same flag, year, cell, then coarser); no number and no weight: set to 0. No record removed.",
 		"length within"            = "Length outside the plausible range of the species (zeros, typos, other species): lf_len_range in the config.",
 		"^Hampel filter$"          = "Outliers among neighbours of the same fishery: CPUE (space and time) for catch and effort, where effort is adjusted rather than records removed; mean length (neighbouring months) for lengths.",
 		"process_lf_data"          = "Missing position or length, invalid strata, outside the domain, or samples with too few length bins. The row count also drops because rows of a sample with the same length are merged (fish kept)."

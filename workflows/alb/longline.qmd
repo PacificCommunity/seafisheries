@@ -94,6 +94,39 @@ tidyCatch <- function(df, w_unit) {
 	df
 }
 
+# Missing weights of the raised records (NA after tidyCatch()):
+#   number > 0, no weight -> number x mean weight per fish of the species,
+#                            from raised records with both, by tier (finest first;
+#                            a tier is used when its reference has >= min_fish fish)
+#   number 0, no weight   -> catch unknown, set to 0
+# Adds <sp>_w_source: "reported", "extrapolated: <tier>" or "unknown (0)".
+extrapolateRaisedWeights <- function(df, tiers, min_fish) {
+	for (s in species_all) {
+		n <- paste0(s, "_n"); w <- paste0(s, "_w"); src <- paste0(s, "_w_source")
+		miss <- is.na(df[[w]])
+		df[[src]] <- ifelse(miss, NA_character_, "reported")
+		ref <- !miss & df[[n]] > 0 & df[[w]] > 0
+		todo <- miss & df[[n]] > 0
+		for (t in tiers) {
+			if (!any(todo)) break
+			kr <- do.call(paste, c(df[ref, t, drop = FALSE], sep = "|"))
+			nw <- rowsum(cbind(n = df[[n]][ref], w = df[[w]][ref]), kr)
+			nw <- nw[nw[, "n"] >= min_fish, , drop = FALSE]
+			k  <- match(do.call(paste, c(df[todo, t, drop = FALSE], sep = "|")), rownames(nw))
+			ok <- !is.na(k)
+			i  <- which(todo)[ok]
+			df[[w]][i]   <- df[[n]][i] * nw[k[ok], "w"] / nw[k[ok], "n"]
+			df[[src]][i] <- paste("extrapolated:", paste(t, collapse = " x "))
+			todo[i] <- FALSE
+		}
+		unknown <- is.na(df[[w]])
+		df[[w]][unknown]   <- 0
+		df[[src]][unknown] <- "unknown (0)"
+		if (any(todo)) cat(sum(todo), s, "records with a number but no reference weight: set to 0\n")
+	}
+	df
+}
+
 # Length code conversion to UF: UF = a * len^b, coefficients per code from
 # config (len_conversion). Same as standardize_length_code(), whose
 # coefficients are fixed (YFT).
@@ -468,8 +501,8 @@ EC_rai_raw <- EC_raw
 ## Data cleaning
 
 ```{r rai_clean}
-# Same species as the YFT run (no "oth" in the old raised query)
-rai_catch_cols <- paste0(c("yft", "bet", "alb", "skj"), "_n")
+# all species, oth included, as for the operational data
+rai_catch_cols <- n_cols
 
 res <- runStep(EC_raw, "raised", "convert coordinates",
 			   function(d) convert_coordinates_df(d, report = TRUE))
@@ -477,12 +510,11 @@ diagAdd("tables", "coords_raised", res$summary)
 EC_raw <- res$data |>
 	mutate(latCent = latitude + 2.5, lonCent = longitude + 2.5)
 
-# Only the target weight is required. Numbers may be NA (records reported in
-# weight only): kept, as in the YFT run where they were set to 0. They get no
-# fishery from the species composition but still count in the delta.
-# Non-target weights may be NA (partial weights).
+# No catch column required: a missing number was set to 0 by tidyCatch()
+# (records reported in weight only are kept, as in the YFT run), and missing
+# weights are extrapolated below, so that no record (and its effort) is lost.
 EC_raw <- runStep(EC_raw, "raised", "remove_invalid", remove_invalid,
-				  required_cols = c("ymd", "latitude", "longitude", "E", sp_w))
+				  required_cols = c("ymd", "latitude", "longitude", "E"))
 EC_raw <- runStep(EC_raw, "raised", "remove_zero_fisheries", remove_zero_fisheries,
 				  catch_cols = rai_catch_cols, effort_col = "E")
 EC_raw <- runStep(EC_raw, "raised", "duplicates", removeContentDuplicates,
@@ -490,6 +522,27 @@ EC_raw <- runStep(EC_raw, "raised", "duplicates", removeContentDuplicates,
 EC_raw <- runStep(EC_raw, "raised", "apply_pacific_mask", apply_pacific_mask,
 				  lat_col = "latCent", lon_col = "lonCent", pmask_lookup = p5mask_lookup)
 EC_raw <- EC_raw |> mutate(type = "raised")
+
+# Missing weights (species reported in numbers only, or partly without weight)
+EC_raw <- runStep(EC_raw, "raised", "extrapolate missing weights", extrapolateRaisedWeights,
+				  tiers = rai_w_tiers, min_fish = rai_w_min_fish)
+w_src <- do.call(rbind, lapply(species_all, function(s) {
+	src <- EC_raw[[paste0(s, "_w_source")]]
+	data.frame(species = s, source = sub(":.*", "", src), tier = sub("^[^:]*:? ?", "", src),
+			   w = EC_raw[[paste0(s, "_w")]], flag = EC_raw$flag)
+})) |> filter(source != "reported")
+diagAdd("tables", "raised_weight_extrapolation", w_src |>
+	group_by(species, source, tier) |>
+	summarise(records = n(), catch_mt = round(sum(w), 1), .groups = "drop") |>
+	as.data.frame())
+diagAdd("tables", "raised_weight_extrapolation_by_flag", w_src |>
+	filter(source == "extrapolated") |>
+	group_by(species, flag) |>
+	summarise(records = n(), catch_mt = round(sum(w), 1), .groups = "drop") |>
+	arrange(species, desc(catch_mt)) |>
+	as.data.frame())
+knitr::kable(.diag$tables$raised_weight_extrapolation,
+			 caption = "Raised records with a missing weight: extrapolated (number x mean weight) or unknown (set to 0)")
 
 EC_list <- runStep(EC_raw, "raised", "remove_dummy_fisheries", remove_dummy_fisheries,
 				   catch_cols = rai_catch_cols, effort_col = "E", return_dummy = TRUE)

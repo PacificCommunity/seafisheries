@@ -37,6 +37,13 @@ hbf_threshold_cap <- 50                    # captain logbooks, max HBF = 49 in Y
 hbf_threshold_obs <- 55                    # observers, see plot_hbf_histogram()
 trip_gap_days     <- 3                     # days without sets that start a new trip
 
+# ---- Raised data ----------------------------------------------------------------
+# Missing weights of raised records reported in numbers: number x mean weight
+# per fish of the species, from raised records with both, finest tier first;
+# a tier is used when its reference has at least rai_w_min_fish fish.
+rai_w_tiers    <- list(c("flag", "yr", "latCent", "lonCent"), c("flag", "yr"), "yr")
+rai_w_min_fish <- 30
+
 # ---- Length frequency ---------------------------------------------------------
 # Conversion of other length codes to UF (upper jaw to caudal fork):
 # UF = a * len^b. Codes not listed here and not UF are dropped.
@@ -80,10 +87,11 @@ thr_E <- 1                                 # delta cells with effort <= thr_E se
 min_len <- 20
 max_len <- 140
 
+# Figures of LL_fisheries.qmd (CPUE maps and time series): years shown.
+# Does not filter the data or the outputs.
+plot_years <- c(1980, 2022)
+
 # Hampel filter
 hampel_EC <- list(year_window = 5, radius_km = 250, k = 7)
 hampel_LF <- list(month_window = 6, k = 7)
 
-# Figures of LL_fisheries.qmd (CPUE maps and time series): years shown.
-# Does not filter the data or the outputs.
-plot_years <- c(1980, 2022)
