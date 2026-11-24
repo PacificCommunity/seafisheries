@@ -84,3 +84,6 @@ max_len <- 140
 hampel_EC <- list(year_window = 5, radius_km = 250, k = 7)
 hampel_LF <- list(month_window = 6, k = 7)
 
+# Figures of LL_fisheries.qmd (CPUE maps and time series): years shown.
+# Does not filter the data or the outputs.
+plot_years <- c(1980, 2022)

@@ -608,6 +608,100 @@ saveIt(LF_f_hampel_rai, "LL_LF_hampel_rai.RDS")
 knitr::kable(stepsTable()[grepl("^hampel", stepsTable()$dataset), ], row.names = FALSE, caption = "Hampel filter")
 ```
 
+# CPUE maps
+
+CPUE per cell and fishery over `plot_years` (config), after the Hampel filter
+(adjusted effort): total catch / total effort of the cell, i.e. the mean of
+the monthly CPUE weighted by effort. An unweighted mean of monthly CPUE gives
+months with little effort (and extreme CPUE) as much weight as the others; a
+sum of CPUE grows with the number of months fished. CPUE in mt per 100 hooks,
+as in the outputs. Same linear colour scale on every map, capped to the
+5th-95th percentiles of positive CPUE (cells beyond take the end colours);
+grey: effort without catch of the species.
+
+```{r cpue_maps_data}
+cpue_cells <- function(d, res) {
+	d$E_used <- if ("adjusted_E" %in% names(d)) d$adjusted_E else d$E
+	d |>
+		filter(yr >= plot_years[1], yr <= plot_years[2]) |>
+		group_by(f, lat, lon) |>
+		summarise(C = sum(C, na.rm = TRUE), E = sum(E_used, na.rm = TRUE), .groups = "drop") |>
+		filter(E > 0) |>
+		mutate(CPUE = C / E, res = res,                  # mt per 100 hooks
+			   fishery = factor(paste("Fishery", f), levels = paste("Fishery", sort(unique(f)))))
+}
+cpue_map <- bind_rows(cpue_cells(EC_f_hampel_opr, 1), cpue_cells(EC_f_hampel_raidelta, 5))
+cpue_lims <- quantile(cpue_map$CPUE[cpue_map$CPUE > 0], c(0.05, 0.95), names = FALSE)
+cpue_map$CPUE_plot <- ifelse(cpue_map$CPUE > 0, pmin(pmax(cpue_map$CPUE, cpue_lims[1]), cpue_lims[2]), NA)
+map_xlim <- range(cpue_map$lon) + c(-3, 3)
+map_ylim <- range(cpue_map$lat) + c(-3, 3)
+
+plot_cpue <- function(d, title) {
+	ggplot(d) +
+		geom_tile(aes(x = lon, y = lat, fill = CPUE_plot), width = d$res[1], height = d$res[1]) +
+		map_bg() +
+		scale_fill_viridis_c(name = paste(species, "CPUE (mt / 100 hooks)"),
+							 limits = cpue_lims, na.value = "grey75") +
+		facet_wrap(~ fishery, ncol = 3) +
+		coord_labels() +
+		coord_fixed(xlim = map_xlim, ylim = map_ylim) +
+		labs(title = title) +
+		customTheme(8)
+}
+```
+
+```{r cpue_maps_opr, fig.width = 7.5, fig.height = 8}
+plot_cpue(cpue_map |> filter(f <= nb_f_opr),
+		  paste0("Operational fisheries (1 deg), ", plot_years[1], "-", plot_years[2]))
+```
+
+```{r cpue_maps_delta, fig.width = 7.5, fig.height = 8}
+plot_cpue(cpue_map |> filter(f > nb_f_opr),
+		  paste0("Delta fisheries (5 deg), ", plot_years[1], "-", plot_years[2]))
+```
+
+## CPUE time series
+
+Annual CPUE per fishery over `plot_years` (config), after the Hampel filter: total catch / total
+(adjusted) effort of the fishery that year, in mt per 100 hooks. Y axis free
+per fishery.
+
+```{r cpue_ts}
+# adjusted effort where the Hampel filter produced it, else the effort
+# (each output on its own: bind_rows() would give NA adjusted_E to an output
+# without the column)
+with_E_used <- function(d) {
+	d$E_used <- if ("adjusted_E" %in% names(d)) dplyr::coalesce(d$adjusted_E, d$E) else d$E
+	d
+}
+cpue_year <- bind_rows(with_E_used(EC_f_hampel_opr), with_E_used(EC_f_hampel_raidelta)) |>
+	filter(yr >= plot_years[1], yr <= plot_years[2]) |>
+	group_by(f, yr) |>
+	summarise(C = sum(C, na.rm = TRUE), E = sum(E_used, na.rm = TRUE), .groups = "drop") |>
+	filter(E > 0) |>
+	mutate(CPUE = C / E,
+		   fishery = factor(paste("Fishery", f), levels = paste("Fishery", sort(unique(f)))))
+
+plot_cpue_ts <- function(d, title) {
+	if (nrow(d) == 0) return(invisible(NULL))
+	ggplot(d, aes(x = yr, y = CPUE)) +
+		geom_line() +
+		geom_point(size = 0.6) +
+		facet_wrap(~ fishery, ncol = 3)+#, scales = "free_y") +
+		labs(x = "Year", y = paste(species, "CPUE (mt / 100 hooks)"), title = title) +
+		theme_bw(base_size = 8) +
+		theme(strip.background = element_blank())
+}
+```
+
+```{r cpue_ts_opr, fig.width = 7.5, fig.height = 6}
+plot_cpue_ts(cpue_year |> filter(f <= nb_f_opr, f %in% c(1,2,4,5,7)), "Operational fisheries")
+```
+
+```{r cpue_ts_delta, fig.width = 7.5, fig.height = 6}
+plot_cpue_ts(cpue_year |> filter(f > nb_f_opr), "Delta fisheries")
+```
+
 # Fisheries
 
 ```{r fisheries_table}
