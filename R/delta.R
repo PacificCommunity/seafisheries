@@ -71,7 +71,7 @@ reconcile_delta <- function(raised, operational, key = c("flag", "latCent", "lon
 		D <- tapply(d, g, sum)
 		P <- tapply(pmax(d, 0), g, sum)
 		s <- ifelse(D > 0 & P > 0, D / P, 0)
-		cells[[v]] <- pmax(d, 0) * s[g]
+		cells[[v]] <- as.vector(pmax(d, 0) * s[g])   # as.vector: s[g] is a 1D array
 		groups[[v]] <- data.frame(group = names(D), variable = v,
 								  raised = as.vector(tapply(r, g, sum)),
 								  operational = as.vector(tapply(o, g, sum)),
