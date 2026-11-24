@@ -365,16 +365,21 @@ assign_records <- function(fit, df, method = c("lda", "centroid"), prior = fit$p
 #' @param by Character; optional grouping column(s) for the accuracy
 #'   (e.g. "flag", "decade").
 #' @param method,prior Passed to [assign_records()].
+#' @param prob_breaks Classes of assignment probability for the calibration
+#'   table.
 #'
 #' @return A list: `accuracy` (weighted share correctly assigned), `by_cluster`
 #'   (recall, precision and weight share per fishery), `confusion` (known in
-#'   rows, assigned in columns, shares of the total weight), `by_group`
-#'   (if `by`), and the settings.
+#'   rows, assigned in columns, shares of the total weight), `calibration`
+#'   (per class of assignment probability: weight share, mean probability and
+#'   accuracy; if the probability is reliable, accuracy is close to the mean
+#'   probability), `by_group` (if `by`), and the settings.
 #'
 #' @family fisheries assignment
 #' @export
 check_assignment <- function(fit, df, cl, hide = NULL, weight_col = NULL, by = NULL,
-							 method = "lda", prior = fit$prior) {
+							 method = "lda", prior = fit$prior,
+							 prob_breaks = c(0, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1)) {
 	if (length(cl) != nrow(df)) stop("cl must have one value per row of df")
 	df <- as.data.frame(df)
 	d2 <- df
@@ -382,6 +387,13 @@ check_assignment <- function(fit, df, cl, hide = NULL, weight_col = NULL, by = N
 	a <- assign_records(fit, d2, method = method, prior = prior)
 	w <- if (is.null(weight_col)) rep(1, nrow(df)) else df[[weight_col]]
 	res <- .compare_assignment(cl, a$cluster, w, fit$labels)
+	ok  <- !is.na(a$cluster) & !is.na(cl)
+	band <- cut(a$prob[ok], prob_breaks, include.lowest = TRUE)
+	wo <- w[ok]; hit_o <- a$cluster[ok] == cl[ok]
+	res$calibration <- data.frame(prob = levels(band),
+		weight_share = round(as.vector(tapply(wo, band, sum)) / sum(wo), 4),
+		mean_prob = round(as.vector(tapply(wo * a$prob[ok], band, sum) / tapply(wo, band, sum)), 4),
+		accuracy = round(as.vector(tapply(wo * hit_o, band, sum) / tapply(wo, band, sum)), 4))
 	if (!is.null(by)) {
 		g   <- do.call(paste, c(.add_period_cols(df, fit$date_col)[by], sep = " | "))
 		ok  <- !is.na(a$cluster) & !is.na(cl)

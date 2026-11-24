@@ -12,7 +12,8 @@ check_assignment(
   weight_col = NULL,
   by = NULL,
   method = "lda",
-  prior = fit$prior
+  prior = fit$prior,
+  prob_breaks = c(0, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1)
 )
 }
 \arguments{
@@ -31,12 +32,17 @@ NULL for record counts.}
 (e.g. "flag", "decade").}
 
 \item{method, prior}{Passed to \code{\link[=assign_records]{assign_records()}}.}
+
+\item{prob_breaks}{Classes of assignment probability for the calibration
+table.}
 }
 \value{
 A list: \code{accuracy} (weighted share correctly assigned), \code{by_cluster}
 (recall, precision and weight share per fishery), \code{confusion} (known in
-rows, assigned in columns, shares of the total weight), \code{by_group}
-(if \code{by}), and the settings.
+rows, assigned in columns, shares of the total weight), \code{calibration}
+(per class of assignment probability: weight share, mean probability and
+accuracy; if the probability is reliable, accuracy is close to the mean
+probability), \code{by_group} (if \code{by}), and the settings.
 }
 \description{
 Assigns \code{df} with \code{\link[=assign_records]{assign_records()}} after setting the \code{hide} variables to

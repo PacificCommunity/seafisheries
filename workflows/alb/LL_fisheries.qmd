@@ -110,15 +110,14 @@ chk_all <- check_assignment(fit, opr[ref, ], opr$cluster_km[ref], weight_col = "
 							method = assign_method)
 
 hide_vars <- intersect(c("mean_hbf", "hbf_cat"), clust_vars)
-priors <- if (assign_prior == "tiered") c("equal", "global", "tiered") else
-	unique(c("equal", "global", assign_prior))
+priors <- unique(c("equal", "global", assign_prior))
 chk_hide <- lapply(priors, function(pr)
 	check_assignment(fit, opr[ref, ], opr$cluster_km[ref], hide = hide_vars, weight_col = "E",
 					 by = "flag", method = assign_method, prior = pr))
 names(chk_hide) <- priors
 
 acc <- data.frame(test = c("all variables", paste0(paste(hide_vars, collapse = ", "), " hidden, prior ", priors)),
-				  accuracy = round(c(chk_all$accuracy, sapply(chk_hide, `[[`, "accuracy")), 4))
+				  accuracy = round(unname(c(chk_all$accuracy, sapply(chk_hide, `[[`, "accuracy"))), 4))
 diagAdd("tables", "assignment_accuracy", acc)
 knitr::kable(acc, caption = "Share of effort assigned to its k-means fishery")
 
@@ -127,12 +126,28 @@ diagAdd("tables", "assignment_by_fishery", chk$by_cluster)
 conf <- as.data.frame.matrix(chk$confusion)
 conf <- cbind(kmeans = rownames(conf), conf)
 diagAdd("tables", "assignment_confusion", conf)
-diagAdd("tables", "assignment_by_flag", chk$by_group)
 knitr::kable(chk$by_cluster, caption = paste0("HBF hidden, prior ", assign_prior, ": recall and precision per fishery"))
 knitr::kable(conf, digits = 3, row.names = FALSE,
 			 caption = "HBF hidden: k-means fishery (rows) vs assigned (columns), share of effort")
 ```
 
+Calibration: if the assignment probability is reliable, the accuracy of each
+probability class is close to its mean probability. The mean probability of
+the records actually assigned is then an estimate of their accuracy, with
+their own prior and variables (valid only if records without HBF look like
+the complete records of the same fishery, which this test cannot check).
+
+```{r opr_calibration}
+diagAdd("tables", "assignment_calibration", chk$calibration)
+knitr::kable(chk$calibration, caption = "HBF hidden: accuracy by class of assignment probability")
+
+# by decade, for the flags with the most assigned effort: a flag reporting HBF
+# in some decades only can be accurate overall and wrong for the years assigned
+chk_dec <- check_assignment(fit, opr[ref, ], opr$cluster_km[ref], hide = hide_vars, weight_col = "E",
+							by = c("flag", "decade"), method = assign_method, prior = assign_prior)
+```
+
+## Assigning the incomplete records
 ## Assigning the incomplete records
 
 ```{r opr_assign}
@@ -156,6 +171,48 @@ if (any(is.na(opr$f)))
 knitr::kable(f_summary, caption = paste0("Operational fisheries; low_prob: assigned with probability < 0.8; catch: ", species, " (mt)"))
 
 saveIt(opr |> dplyr::select(row_id, f, f_source, f_prob), "LL_opr_fisheries.RDS")
+```
+
+Expected accuracy of the assigned records: their mean assignment probability,
+weighted by effort, next to the accuracy of the same flag in the HBF-hidden test.
+
+```{r opr_expected_accuracy}
+asg <- opr[!complete & !is.na(opr$f), ]
+exp_by <- function(d, g) d |>
+	group_by(across(all_of(g))) |>
+	summarise(assigned_effort = sum(E), expected_accuracy = round(sum(E * f_prob) / sum(E), 4),
+			  low_prob_effort = round(sum(E[f_prob < 0.8]) / sum(E), 4), .groups = "drop")
+
+exp_all <- data.frame(assigned_effort = sum(asg$E),
+					  pct_of_effort = round(100 * sum(asg$E) / sum(opr$E), 2),
+					  expected_accuracy = round(sum(asg$E * asg$f_prob) / sum(asg$E), 4))
+exp_f <- exp_by(asg, "f")
+exp_flag <- opr |>
+	group_by(flag) |>
+	summarise(effort = sum(E), pct_assigned = round(100 * sum(E[f_source == "assigned"]) / sum(E), 1),
+			  .groups = "drop") |>
+	left_join(exp_by(asg, "flag"), by = "flag") |>
+	left_join(chk$by_group |> dplyr::select(flag, test_accuracy = accuracy), by = "flag") |>
+	arrange(desc(assigned_effort))
+
+# decades of the 10 flags with the most assigned effort
+top_flags <- head(exp_flag$flag[!is.na(exp_flag$assigned_effort)], 10)
+asg$decade <- 10L * (year(asg$ymd) %/% 10L)
+exp_dec <- exp_by(asg |> filter(flag %in% top_flags), c("flag", "decade")) |>
+	mutate(key = paste(flag, decade, sep = " | ")) |>
+	left_join(chk_dec$by_group |> rename(key = `flag | decade`) |>
+			  	dplyr::select(key, test_accuracy = accuracy), by = "key") |>
+	dplyr::select(-key) |>
+	arrange(flag, decade)
+
+diagAdd("tables", "assigned_expected_accuracy", exp_all)
+diagAdd("tables", "assigned_by_fishery", as.data.frame(exp_f))
+diagAdd("tables", "assigned_by_flag", as.data.frame(exp_flag))
+diagAdd("tables", "assigned_by_flag_decade", as.data.frame(exp_dec))
+knitr::kable(exp_all, caption = "Assigned records: share of effort and expected accuracy")
+knitr::kable(exp_f, caption = "Assigned records per fishery: expected accuracy and share of effort with probability < 0.8")
+knitr::kable(exp_flag, caption = "Per flag: assigned effort, expected accuracy, and accuracy in the HBF-hidden test")
+knitr::kable(exp_dec, caption = "Flags with the most assigned effort, per decade (test_accuracy NA: no complete record that decade)")
 ```
 
 ```{r opr_ec}
