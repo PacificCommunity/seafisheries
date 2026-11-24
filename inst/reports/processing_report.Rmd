@@ -32,7 +32,11 @@ datasets <- unique(steps$dataset)
 ds_labels <- c(captain = "Captain logbooks", observer = "Observer logbooks",
 			   raised = "Raised catch and effort", LF_opr = "Operational length frequency",
 			   LF_port = "Port sampling lengths", LF_obs = "Observer lengths",
-			   LF_agg = "Aggregated length frequency", hampel = "Hampel filter")
+			   LF_agg = "Aggregated length frequency",
+			   hampel_EC_opr = "Hampel filter: operational catch and effort",
+			   hampel_EC_delta = "Hampel filter: delta catch and effort",
+			   hampel_LF_opr = "Hampel filter: operational lengths",
+			   hampel_LF_rai = "Hampel filter: aggregated lengths")
 ds_label <- function(ds) ifelse(ds %in% names(ds_labels), ds_labels[ds], ds)
 # selection steps (other species, gears, data sources) are not data loss
 steps$selection <- grepl("sp_code|SP_ID", steps$step)
@@ -69,7 +73,7 @@ table_info <- list(
 	assigned_by_flag = c("Assigned records per flag",
 		"test_accuracy: accuracy of the flag's complete records in the HBF-hidden test."),
 	assigned_by_flag_decade = c("Assigned records per flag and decade",
-		"Flags with the most assigned effort. test_accuracy NA: no complete record of the flag that decade to test against."),
+		"Flags with the most assigned effort. test_accuracy: HBF-hidden test on all complete records of the flag that decade (outside the reference years, out of sample); NA: no complete record that decade."),
 	opr_fisheries = c("Operational fisheries", "low_prob: records assigned with a probability below 0.8."),
 	strata_accuracy = c("Raised-like records: accuracy", "Reference records aggregated to flag x month x 5 deg strata and assigned."),
 	strata_by_purity = c("Raised-like records: accuracy by purity", "Purity: effort share of the stratum's main fishery."),

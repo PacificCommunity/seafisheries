@@ -560,8 +560,10 @@ LF_dat <- LF_dat |>
 
 # infer first (recovers NULL/NM/XX from trip-mates), then convert SD/US/PS to
 # UF with the config coefficients, then drop whatever is still not UF.
+# every known code counts as valid here, converted or not: a US or PS length
+# must not be relabelled UF from its trip-mates
 LF_dat <- runStep(LF_dat, "LF_opr", "infer_len_code_from_trip", infer_len_code_from_trip,
-				  valid_codes = c("UF", names(len_conversion)))
+				  valid_codes = c("UF", "SD", "US", "PS"))
 LF_dat <- runStep(LF_dat, "LF_opr", "convert length codes to UF", convertLenCode,
 				  conv = len_conversion)
 LF_dat <- runStep(LF_dat, "LF_opr", "len_code == UF", filter_valid_categories,
@@ -569,6 +571,9 @@ LF_dat <- runStep(LF_dat, "LF_opr", "len_code == UF", filter_valid_categories,
 LF_dat <- runStep(LF_dat, "LF_opr", "trim_vesselname", trim_vesselname,
 				  vesselname_col = "vesselname")
 LF_dat$len <- customRound(LF_dat$len)
+# implausible lengths for the species (zeros, typos, other species)
+LF_dat <- runStep(LF_dat, "LF_opr", "length within lf_len_range",
+				  function(d) dplyr::filter(d, len >= lf_len_range[1], len <= lf_len_range[2]))
 
 # Port: trip start/end can legitimately span land and sea, so bounding-box
 # overlap only, no exact grid mask.
@@ -681,6 +686,11 @@ res <- runStep(LF_raw, "LF_agg", "convert coordinates",
 			   function(d) convert_coordinates_df(d, lat_col = "latitude", lon_col = "longitude", report = TRUE))
 diagAdd("tables", "coords_LF_agg", res$summary)
 LF_raw <- res$data
+
+# implausible lengths for the species; a bin [len, len + LSTRAT) is kept if it
+# starts within the range
+LF_raw <- runStep(LF_raw, "LF_agg", "length within lf_len_range",
+				  function(d) dplyr::filter(d, is.na(len) | (len >= lf_len_range[1] & len <= lf_len_range[2])))
 
 LF_clean <- runStep(LF_raw, "LF_agg", "process_lf_data", process_lf_data,
 	required_cols = c("latitude", "longitude", "len"),

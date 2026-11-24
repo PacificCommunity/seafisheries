@@ -40,20 +40,23 @@ trip_gap_days     <- 3                     # days without sets that start a new 
 # ---- Length frequency ---------------------------------------------------------
 # Conversion of other length codes to UF (upper jaw to caudal fork):
 # UF = a * len^b. Codes not listed here and not UF are dropped.
-# TODO: YFT coefficients (Project 90 update, as in standardize_length_code()),
-# replace with ALB values.
-len_conversion <- list(
-	SD = c(a = 3.951,  b = 0.8369),
-	US = c(a = 3.951,  b = 0.8369),       # US treated as SD
-	PS = c(a = 11.385, b = 0.6619)
-)
+# No SPC length-length factor for albacore (Project 90 reports and size data
+# review, SC16-SC21): SD/US/PS albacore lengths (~0.3% of fish) are dropped.
+# The YFT factors (Macdonald et al. 2020, SC16/ST-IP-06, Table A2) were:
+#   SD = c(a = 3.951, b = 0.8369), US = as SD, PS = c(a = 11.385, b = 0.6619)
+len_conversion <- list()
+# Plausible albacore lengths (cm UF): outside, lengths are removed as errors.
+# 2026 download: 7,368 operational lengths > 140 cm (7,255 port sampling),
+# 219 in 130-140 cm, 473 < 30 cm (including zeros); 0.1% quantile 59 cm.
+# 140 = FishBase maximum. TODO: check the lower bound on the distribution below 60 cm.
+lf_len_range      <- c(30, 140)
 lf_min_bins       <- 3                     # min distinct length bins per aggregated sample
 
 # ---- Fisheries (LL_fisheries.qmd) -----------------------------------------------
 # longlineTypology output, copied from the clustering run (gitignored)
 cluster_file   <- here::here("data-raw", "clusters", "sp_hbf_latabs_pc4", "cluster_diagnostics.RDS")
 k_opr          <- 7
-merge_clusters <- list("3" = c(3, 5))      # NULL for none; saved numbering
+merge_clusters <- NULL                     # e.g. list("3" = c(3, 5)) merges 5 into 3 (saved numbering)
 fisheries_tag  <- "sp_hbf_latabs_pc4_k7"   # output folder: <save_folder>/LL_fisheries/<tag>
 
 # Assignment of records without every clustering variable (no valid HBF, raised)
@@ -66,10 +69,13 @@ assign_fit_years   <- NULL                 # NULL = fit years of the clustering
 # Delta (raised - operational)
 thr_E <- 1                                 # delta records with effort <= thr_E removed
 
-# Length frequency outputs
-# TODO: YFT values, set ALB bounds
+# Length frequency outputs: lengths outside are capped to the bounds, and the
+# length bins of the SEAPODYM files will be min_len:max_len.
+# max_len: FishBase maximum for albacore (140 cm FL). min_len: no albacore
+# below 20 cm in longline data. Check both against the length classes of the
+# SEAPODYM albacore configuration.
 min_len <- 20
-max_len <- 250
+max_len <- 140
 
 # Hampel filter
 hampel_EC <- list(year_window = 5, radius_km = 250, k = 7)

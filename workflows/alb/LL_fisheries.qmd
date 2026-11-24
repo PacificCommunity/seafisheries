@@ -142,8 +142,10 @@ diagAdd("tables", "assignment_calibration", chk$calibration)
 knitr::kable(chk$calibration, caption = "HBF hidden: accuracy by class of assignment probability")
 
 # by decade, for the flags with the most assigned effort: a flag reporting HBF
-# in some decades only can be accurate overall and wrong for the years assigned
-chk_dec <- check_assignment(fit, opr[ref, ], opr$cluster_km[ref], hide = hide_vars, weight_col = "E",
+# in some decades only can be accurate overall and wrong for the years assigned.
+# All complete records, not only the reference years: the decades outside them
+# are an out-of-sample test.
+chk_dec <- check_assignment(fit, opr[complete, ], opr$cluster_km[complete], hide = hide_vars, weight_col = "E",
 							by = c("flag", "decade"), method = assign_method, prior = assign_prior)
 ```
 
@@ -212,7 +214,7 @@ diagAdd("tables", "assigned_by_flag_decade", as.data.frame(exp_dec))
 knitr::kable(exp_all, caption = "Assigned records: share of effort and expected accuracy")
 knitr::kable(exp_f, caption = "Assigned records per fishery: expected accuracy and share of effort with probability < 0.8")
 knitr::kable(exp_flag, caption = "Per flag: assigned effort, expected accuracy, and accuracy in the HBF-hidden test")
-knitr::kable(exp_dec, caption = "Flags with the most assigned effort, per decade (test_accuracy NA: no complete record that decade)")
+knitr::kable(exp_dec, caption = "Flags with the most assigned effort, per decade (test_accuracy: all complete records of that decade; NA: none)")
 ```
 
 ```{r opr_ec}
@@ -564,7 +566,7 @@ saveIt(LF_LLrai, "LL_LF_rai_f.RDS")
 hampelCE <- function(d) do.call(apply_hampel, c(list(df = d, type = "CE"), hampel_EC))
 hampelLF <- function(d) do.call(apply_hampel, c(list(df = d, type = "LF"), hampel_LF))
 
-EC_f_hampel_opr <- runStep(EC_f_opr, "hampel", "EC operational", hampelCE)
+EC_f_hampel_opr <- runStep(EC_f_opr, "hampel_EC_opr", "Hampel filter", hampelCE)
 saveIt(EC_f_hampel_opr, "LL_EC_hampel_opr.RDS")
 
 EC_f_raidelta_fmt <- EC_f_raidelta |>
@@ -572,15 +574,15 @@ EC_f_raidelta_fmt <- EC_f_raidelta |>
 	rename(lon = longitude, lat = latitude) |>
 	dplyr::select(f, yr, mm, dd, gr, lat, lon, res, E, C = all_of(sp_w)) |>
 	mutate(CPUE = ifelse(E > 0, C / E, 0))
-EC_f_hampel_raidelta <- runStep(EC_f_raidelta_fmt, "hampel", "EC delta", hampelCE)
+EC_f_hampel_raidelta <- runStep(EC_f_raidelta_fmt, "hampel_EC_delta", "Hampel filter", hampelCE)
 saveIt(EC_f_hampel_raidelta, "LL_EC_hampel_raidelta.RDS")
 
-LF_f_hampel_opr <- runStep(LF_LLdet, "hampel", "LF operational", hampelLF)
+LF_f_hampel_opr <- runStep(LF_LLdet, "hampel_LF_opr", "Hampel filter", hampelLF)
 saveIt(LF_f_hampel_opr, "LL_LF_hampel_opr.RDS")
-LF_f_hampel_rai <- runStep(LF_LLrai, "hampel", "LF raised", hampelLF)
+LF_f_hampel_rai <- runStep(LF_LLrai, "hampel_LF_rai", "Hampel filter", hampelLF)
 saveIt(LF_f_hampel_rai, "LL_LF_hampel_rai.RDS")
 
-showSteps("hampel")
+knitr::kable(stepsTable()[grepl("^hampel", stepsTable()$dataset), ], row.names = FALSE, caption = "Hampel filter")
 ```
 
 # Fisheries
