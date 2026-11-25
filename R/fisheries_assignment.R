@@ -48,7 +48,7 @@ assignment_vars <- function(df, scenario, lat_col = "latitude") {
 #' Scales the clustering variables with the saved `scale_params`, projects
 #' them on the saved PCA and gives each record the nearest saved k-means
 #' centroid, then converts the raw kmeans label to the saved cluster numbering
-#' ([longlineTypology::clusterLabels()]). Only the fitted objects of
+#' (`longlineTypology::clusterLabels()`). Only the fitted objects of
 #' `cluster_diag` are used: `df` can be any dataset with the clustering
 #' variables, whatever its number of rows. Records missing a clustering
 #' variable, or with an invalid HBF when HBF is used, get NA.

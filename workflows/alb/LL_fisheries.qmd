@@ -69,16 +69,21 @@ the complete records as reference.
 opr <- inp("LL_EC_LF_mm.RDS") |>
 	assignment_vars(scenario, lat_col = "latitude")
 
-opr$cluster_km <- apply_clusters(opr, cluster_diag, k_opr, merge = merge_clusters)
+opr$cluster_km <- suppressWarnings(apply_clusters(opr, cluster_diag, k_opr, merge = merge_clusters))
 label_map <- attr(opr$cluster_km, "label_map")
 nb_f_opr  <- max(label_map$cluster)
 complete  <- !is.na(opr$cluster_km)
 
 diagAdd("tables", "label_map", label_map)
 diagAdd("tables", "input_check", attr(opr$cluster_km, "input_check"))
+# The clustering was fitted on the whole Pacific: on a stock domain (a subset)
+# the scaled means and sds are expected to differ, so the check only informs.
 if (!all(.diag$tables$input_check$ok))
-	diagWarn("apply_clusters", "variables differing from the clustering data: ",
-			 paste(.diag$tables$input_check$variable[!.diag$tables$input_check$ok], collapse = ", "))
+	diagAdd("tables", "input_check_note", data.frame(note = paste0(
+		"Variables differing from the clustering data: ",
+		paste(.diag$tables$input_check$variable[!.diag$tables$input_check$ok], collapse = ", "),
+		". Expected when the data cover only part of the clustering domain (stock_domain); ",
+		"otherwise check how the variables are built.")))
 knitr::kable(.diag$tables$input_check,
 			 caption = "Complete records of the fit years scaled with the clustering parameters (expected mean 0, sd 1)")
 knitr::kable(label_map, caption = "Cluster numbers: saved, after merging, fishery")

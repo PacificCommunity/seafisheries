@@ -44,7 +44,7 @@ renumbered number) and \code{"input_check"} (data.frame).
 Scales the clustering variables with the saved \code{scale_params}, projects
 them on the saved PCA and gives each record the nearest saved k-means
 centroid, then converts the raw kmeans label to the saved cluster numbering
-(\code{\link[longlineTypology:clusterLabels]{longlineTypology::clusterLabels()}}). Only the fitted objects of
+(\code{longlineTypology::clusterLabels()}). Only the fitted objects of
 \code{cluster_diag} are used: \code{df} can be any dataset with the clustering
 variables, whatever its number of rows. Records missing a clustering
 variable, or with an invalid HBF when HBF is used, get NA.

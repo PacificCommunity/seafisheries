@@ -29,8 +29,14 @@ if (!dir.exists(sql_folder)) stop("SQL folder not found: ", sql_folder,
 								  ". Run workflows/sql_queries.R or check request_tag.")
 dir.create(save_folder, recursive = TRUE, showWarnings = FALSE)
 
-pmask_lookup  <- readRDS(system.file("extdata/masks/pmask_lookup.RDS", package = "seafisheries"))
-p5mask_lookup <- readRDS(system.file("extdata/masks/p5mask_lookup.RDS", package = "seafisheries"))
+# Pacific sea cells (1 and 5 deg), restricted to the stock domain: a cell is
+# kept if its centre lies inside (cell edges of the domain in the config)
+inDomain <- function(lat, lon) lat > stock_domain$lat[1] & lat < stock_domain$lat[2] &
+	lon > stock_domain$lon[1] & lon < stock_domain$lon[2]
+pmask_lookup  <- readRDS(system.file("extdata/masks/pmask_lookup.RDS", package = "seafisheries")) |>
+	dplyr::filter(inDomain(latCent, lonCent))
+p5mask_lookup <- readRDS(system.file("extdata/masks/p5mask_lookup.RDS", package = "seafisheries")) |>
+	dplyr::filter(inDomain(latCent, lonCent))
 ```
 
 ```{r helpers}
@@ -337,7 +343,7 @@ EC_raw <- runStep(EC_raw, "captain", "trim_vesselname", trim_vesselname,
 				  vesselname_col = "vesselname")
 EC_raw <- runStep(EC_raw, "captain", "duplicates", removeContentDuplicates,
 				  id_col = "log_set_id")
-EC_raw <- runStep(EC_raw, "captain", "apply_pacific_mask", apply_pacific_mask,
+EC_raw <- runStep(EC_raw, "captain", "Pacific mask, stock domain", apply_pacific_mask,
 				  lat_col = "latCent", lon_col = "lonCent", pmask_lookup = pmask_lookup)
 if (use_temperature_mask)
 	EC_raw <- runStep(EC_raw, "captain", "apply_temperature_mask", apply_temperature_mask,
@@ -407,7 +413,7 @@ EC_raw <- runStep(EC_raw, "observer", "trim_vesselname", trim_vesselname,
 				  vesselname_col = "vesselname")
 EC_raw <- runStep(EC_raw, "observer", "duplicates", removeContentDuplicates,
 				  id_col = "l_set_id")
-EC_raw <- runStep(EC_raw, "observer", "apply_pacific_mask", apply_pacific_mask,
+EC_raw <- runStep(EC_raw, "observer", "Pacific mask, stock domain", apply_pacific_mask,
 				  lat_col = "latCent", lon_col = "lonCent", pmask_lookup = pmask_lookup)
 if (use_temperature_mask)
 	EC_raw <- runStep(EC_raw, "observer", "apply_temperature_mask", apply_temperature_mask,
@@ -519,7 +525,7 @@ EC_raw <- runStep(EC_raw, "raised", "remove_zero_fisheries", remove_zero_fisheri
 				  catch_cols = rai_catch_cols, effort_col = "E")
 EC_raw <- runStep(EC_raw, "raised", "duplicates", removeContentDuplicates,
 				  id_col = "l_best_id")
-EC_raw <- runStep(EC_raw, "raised", "apply_pacific_mask", apply_pacific_mask,
+EC_raw <- runStep(EC_raw, "raised", "Pacific mask, stock domain", apply_pacific_mask,
 				  lat_col = "latCent", lon_col = "lonCent", pmask_lookup = p5mask_lookup)
 EC_raw <- EC_raw |> mutate(type = "raised")
 
@@ -632,9 +638,9 @@ LF_dat <- runStep(LF_dat, "LF_opr", "length within lf_len_range",
 # overlap only, no exact grid mask.
 LF_port <- LF_dat |>
 	filter(data_source == "port sampling") |>
-	runStep("LF_port", "bounding box overlap",
-			function(d) dplyr::filter(d, lat_to >= lat_range[1] & lat_from <= lat_range[2],
-									  lon_to >= lon_range[1] & lon_from <= lon_range[2]))
+	runStep("LF_port", "bounding box overlap, stock domain",
+			function(d) dplyr::filter(d, lat_to >= stock_domain$lat[1] & lat_from <= stock_domain$lat[2],
+									  lon_to >= stock_domain$lon[1] & lon_from <= stock_domain$lon[2]))
 
 # Observer: one exact point per set, range-check the point, then mask against
 # the 1x1 land/sea grid.
@@ -643,7 +649,7 @@ LF_obs <- LF_dat |>
 	runStep("LF_obs", "filter_bounding_box", filter_bounding_box,
 			lat_col = "lat_from", lon_col = "lon_from",
 			lat_range = lat_range, lon_range = lon_range) |>
-	runStep("LF_obs", "apply_pacific_mask", apply_pacific_mask,
+	runStep("LF_obs", "Pacific mask, stock domain", apply_pacific_mask,
 			lat_col = "latCent", lon_col = "lonCent", pmask_lookup = pmask_lookup)
 
 LF_dat <- bind_rows(LF_port, LF_obs)

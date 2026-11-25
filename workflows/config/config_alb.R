@@ -15,8 +15,17 @@ verbose     <- FALSE                       # TRUE prints each cleaning step's co
                                            # output in the rendered document
 
 # ---- Spatial ------------------------------------------------------------------
-lat_range <- c(-54.5, 64.5)
-lon_range <- c(89.5, 288.5)
+# Stock domain: the SEAPODYM model domain of the stock, as cell EDGES (parfile
+# latitudeMin/Max, longitudeMin/Max). Records whose cell centre lies outside are
+# removed (1 deg operational cells, 5 deg raised cells, length samples); land
+# cells are still removed with the package 1 deg Pacific mask.
+# South Pacific albacore (SEAPODYM SP ALB, 2 deg JRA55 grid):
+stock_domain <- list(lat = c(-59, 5), lon = c(130, 290))
+# North Pacific albacore: replace with the NP parfile domain.
+
+# 1 deg cell-centre bounds of the domain, used by the range filters
+lat_range <- c(stock_domain$lat[1] + 0.5, stock_domain$lat[2] - 0.5)
+lon_range <- c(stock_domain$lon[1] + 0.5, stock_domain$lon[2] - 0.5)
 
 # ---- Masks --------------------------------------------------------------------
 use_temperature_mask <- FALSE              # TRUE removes records in cells colder than min_temp
