@@ -250,3 +250,13 @@ Length frequency data:  %s
 	file = file_readme)
 cat(readLines(file_readme), sep = "\n")
 ```
+
+# Fisheries report
+
+Maps, catch and effort series and length distributions of the fisheries,
+read back from the two files above: `r basename(sub("\\.txt$", "_report.pdf", file_CE))`.
+
+```{r fisheries_report}
+seapodym_fisheries_report(file_CE, file_LF, species = species,
+						  title = paste(species, seapodym_version, "SEAPODYM fisheries"))
+```

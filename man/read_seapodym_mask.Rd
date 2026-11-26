@@ -24,6 +24,9 @@ Other seapodym formatting:
 \code{\link[=apply_seapodym_mask]{apply_seapodym_mask()}},
 \code{\link[=expand_lf_regions]{expand_lf_regions()}},
 \code{\link[=make_seapodym_grid]{make_seapodym_grid()}},
-\code{\link[=read_parfile_grid]{read_parfile_grid()}}
+\code{\link[=read_parfile_grid]{read_parfile_grid()}},
+\code{\link[=read_seapodym_EC]{read_seapodym_EC()}},
+\code{\link[=read_seapodym_LF]{read_seapodym_LF()}},
+\code{\link[=seapodym_fisheries_report]{seapodym_fisheries_report()}}
 }
 \concept{seapodym formatting}
