@@ -105,13 +105,15 @@ seapodym_fisheries_report <- function(ec_file, lf_file = NULL, output_file = NUL
 	on.exit(unlink(work_dir, recursive = TRUE), add = TRUE)
 	file.copy(template, work_dir)
 
-	rmarkdown::render(file.path(work_dir, "seapodym_fisheries_report.Rmd"),
-					  output_file = basename(output_file),
-					  output_dir = dirname(output_file),
-					  intermediates_dir = work_dir,
-					  params = list(ec = ec, lf = lf, title = title, years = years, species = species,
-					  			  ec_file = ec_file, lf_file = if (is.null(lf_file)) "" else lf_file),
-					  envir = new.env(parent = globalenv()),
-					  quiet = quiet)
+	# rendered in a separate R session: knitr cannot knit a document while it
+	# is knitting another one (e.g. when called from format_seapodym.qmd)
+	xfun::Rscript_call(rmarkdown::render, list(
+		input = file.path(work_dir, "seapodym_fisheries_report.Rmd"),
+		output_file = basename(output_file),
+		output_dir = dirname(output_file),
+		intermediates_dir = work_dir,
+		params = list(ec = ec, lf = lf, title = title, years = years, species = species,
+					  ec_file = ec_file, lf_file = if (is.null(lf_file)) "" else lf_file),
+		quiet = quiet))
 	invisible(output_file)
 }

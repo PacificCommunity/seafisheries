@@ -24,6 +24,7 @@ Imports:
 Suggests:
     knitr,
     rmarkdown,
+    xfun,
     here,
     testthat (>= 3.0.0)
 VignetteBuilder: knitr

@@ -55,13 +55,15 @@ processing_report <- function(diag_file, output_file = NULL, title = NULL, quiet
 	on.exit(unlink(work_dir, recursive = TRUE), add = TRUE)
 	file.copy(template, work_dir)
 
-	rmarkdown::render(file.path(work_dir, "processing_report.Rmd"),
-					  output_file = basename(output_file),
-					  output_dir = dirname(output_file),
-					  intermediates_dir = work_dir,
-					  params = list(diag = diag, title = title, source_file = diag_file),
-					  envir = new.env(parent = globalenv()),
-					  quiet = quiet)
+	# rendered in a separate R session, so that it also works from a document
+	# being knitted (knitr cannot knit two documents at once)
+	xfun::Rscript_call(rmarkdown::render, list(
+		input = file.path(work_dir, "processing_report.Rmd"),
+		output_file = basename(output_file),
+		output_dir = dirname(output_file),
+		intermediates_dir = work_dir,
+		params = list(diag = diag, title = title, source_file = diag_file),
+		quiet = quiet))
 	invisible(output_file)
 }
 
