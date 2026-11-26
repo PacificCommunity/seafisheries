@@ -8,6 +8,10 @@ format:
     toc: true
     number-sections: true
     colorlinks: true
+header-includes:
+  - \usepackage{booktabs}
+  - \usepackage{longtable}
+  - \usepackage{float}
 ---
 
 ```{r setup, echo = F, warning = F, message = F}
@@ -150,8 +154,8 @@ EC_raw <- runStep(EC_raw, "OTH_EC", "Pacific mask, stock domain", apply_pacific_
 EC_list <- runStep(EC_raw, "OTH_EC", "remove_dummy_fisheries", remove_dummy_fisheries,
 				   catch_cols = w_cols, effort_col = "E", return_dummy = TRUE)
 EC_oth <- EC_list$data
+EC_dummy <- EC_list$dummy   # saved with the gears not in oth_fisheries, below
 saveIt(EC_oth, "OTH_EC_clean.RDS")
-saveIt(EC_list$dummy, "OTH_EC_dummy.RDS")
 diagAdd("tables", "oth_dummy", EC_list$dummy |>
 	group_by(gr) |>
 	summarise(records = n(), catch = round(sum(.data[[sp_w]]), 1), .groups = "drop") |>
@@ -173,37 +177,53 @@ showSteps("OTH_EC")
 
 # Fisheries
 
-One fishery per gear (or per group of gears, `oth_fisheries`). Records with
-catch but no effort are not in these fisheries: they go to the dummy fishery
-(gear D, catch removal only), built at the SEAPODYM formatting with the
-dummy records of every gear.
+One fishery per gear, or per group of gears (`oth_fisheries`): the fishery
+name is the gear code written for SEAPODYM. The catch of the gears not in
+`oth_fisheries` goes to the dummy fishery (gear D, catch removal only), as
+does the catch without effort. The dummy fishery is built at the SEAPODYM
+formatting with the dummy records of every gear.
 
 ```{r fisheries}
 fisheries_map <- if (is.null(oth_fisheries)) {
 	g <- sort(unique(EC_oth$gr)); stats::setNames(as.list(g), g)
 } else oth_fisheries
-gear_to_f <- stack(fisheries_map) |> transmute(gr = values, fishery = as.character(ind))
+gear_to_f <- stack(fisheries_map) |> transmute(gr = as.character(values), fishery = as.character(ind))
+if (any(duplicated(gear_to_f$gr)))
+	stop("oth_fisheries: a gear is in several fisheries: ", paste(unique(gear_to_f$gr[duplicated(gear_to_f$gr)]), collapse = ", "))
 unmapped <- setdiff(unique(EC_oth$gr), gear_to_f$gr)
-if (length(unmapped))
-	diagWarn("fisheries", "gears not in oth_fisheries, left out: ", paste(unmapped, collapse = ", "))
+
+# gears not in oth_fisheries -> dummy fishery
+EC_dummy <- bind_rows(EC_dummy |> mutate(reason = "no effort"),
+					  EC_oth |> filter(gr %in% unmapped) |> mutate(reason = "gear not in oth_fisheries"))
+saveIt(EC_dummy, "OTH_EC_dummy.RDS")
+gear_route <- bind_rows(
+	EC_oth |> filter(!gr %in% unmapped) |> left_join(gear_to_f, by = "gr") |> mutate(to = fishery),
+	EC_dummy |> mutate(to = paste0("D (", reason, ")"))) |>
+	group_by(gear = gr, to) |>
+	summarise(records = n(), catch = round(sum(.data[[sp_w]], na.rm = TRUE), 1), .groups = "drop") |>
+	arrange(gear, to)
+names(gear_route)[4] <- paste(species, "catch (mt)")
+diagAdd("tables", "gear_route", as.data.frame(gear_route))
+ktab(gear_route, caption = "Gears and the fishery they go to")
 
 ec <- EC_oth |>
 	inner_join(gear_to_f, by = "gr") |>
-	transmute(fishery, gr, yr, mm, latCent, lonCent, E, C = .data[[sp_w]])
+	transmute(fishery, yr, mm, latCent, lonCent, E, C = .data[[sp_w]])
 
 f_levels <- names(fisheries_map)
 f_levels <- f_levels[f_levels %in% ec$fishery]
 EC_f <- ec |>
-	mutate(f = match(fishery, f_levels), res = 5, dd = 15, gr = "O") |>
+	mutate(f = match(fishery, f_levels), res = 5, dd = 15, gr = fishery) |>
 	group_by(f, fishery, yr, mm, dd, gr, lat = latCent, lon = lonCent, res) |>
 	summarise(E = sum(E, na.rm = TRUE), C = sum(C, na.rm = TRUE), .groups = "drop") |>
 	mutate(CPUE = ifelse(E > 0, C / E, 0))
 
 f_tab <- EC_f |> group_by(f, fishery) |>
 	summarise(records = n(), effort_days = sum(E), catch = round(sum(C), 1),
-			  records_no_effort = sum(E == 0), years = paste(range(yr), collapse = "-"), .groups = "drop")
+			  years = paste(range(yr), collapse = "-"), .groups = "drop")
+names(f_tab)[5] <- paste(species, "catch (mt)")
 diagAdd("tables", "fisheries", as.data.frame(f_tab))
-knitr::kable(f_tab, caption = paste0("Other-gear fisheries; catch: ", species, " (mt); numbered from 1 here, renumbered after the other gears at formatting"))
+ktab(f_tab, caption = "Other-gear fisheries (numbered from 1 here, renumbered after the longline fisheries at formatting)")
 saveIt(EC_f, "OTH_EC_f.RDS")
 ```
 

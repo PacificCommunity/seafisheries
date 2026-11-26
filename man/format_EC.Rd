@@ -4,7 +4,7 @@
 \alias{format_EC}
 \title{Convert effort-catch data to SEAPODYM EC format}
 \usage{
-format_EC(df, file)
+format_EC(df, file, progress = interactive())
 }
 \arguments{
 \item{df}{A data frame containing at minimum the columns \code{f},
@@ -12,6 +12,9 @@ format_EC(df, file)
 \code{res}, \code{E}, \code{C}.}
 
 \item{file}{Path to the output text file for the SEAPODYM CE data.}
+
+\item{progress}{Logical; show a progress bar. Default \code{interactive()}
+(no bar when a report is rendered).}
 }
 \value{
 Invisibly \code{NULL}. Called for its side effects: writes

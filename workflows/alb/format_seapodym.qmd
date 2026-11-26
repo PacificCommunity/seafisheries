@@ -8,6 +8,10 @@ format:
     toc: true
     number-sections: true
     colorlinks: true
+header-includes:
+  - \usepackage{booktabs}
+  - \usepackage{longtable}
+  - \usepackage{float}
 ---
 
 ```{r setup, echo = F, warning = F, message = F}
@@ -18,6 +22,7 @@ library(tidyr)
 library(lubridate)
 
 source(here::here("workflows", "config", "config_alb.R"))
+source(here::here("workflows", "R", "diag_helpers.R"))   # ktab()
 
 sp   <- tolower(species)
 sp_w <- paste0(sp, "_w")
@@ -35,11 +40,11 @@ kept if a sea cell of the model covers it.
 grid <- make_seapodym_grid(stock_domain$lat, stock_domain$lon, seapodym_res, mask_file = seapodym_mask_file)
 # stops if the mask does not have one value per cell of the grid
 mask <- read_seapodym_mask(grid)
-knitr::kable(data.frame(
-	item = c("latitude (edges)", "longitude (edges)", "resolution (deg)", "cells", "sea cells", "mask"),
+ktab(data.frame(
+	item = c("latitude (edges)", "longitude (edges)", "resolution (deg)", "cells", "sea cells", "mask folder", "mask file"),
 	value = c(paste(grid$lat, collapse = " to "), paste(grid$lon, collapse = " to "), grid$res,
 			  nrow(mask), sum(mask$value > 0),
-			  seapodym_mask_file)),
+			  dirname(seapodym_mask_file), basename(seapodym_mask_file))),
 	caption = "SEAPODYM grid")
 
 inYears <- function(yr) if (is.null(seapodym_years)) rep(TRUE, length(yr)) else
@@ -49,8 +54,9 @@ inYears <- function(yr) if (is.null(seapodym_years)) rep(TRUE, length(yr)) else
 # EC data
 
 Fisheries are numbered across gears in the order of `seapodym_inputs`
-(gear code + number); the dummy fishery D (catch without effort, all gears)
-comes last.
+(gear group + number). The dummy fishery D comes last: catch without effort of
+every gear and catch of the other gears not in `oth_fisheries`, written with
+effort 0 (catch removal only). It has no Hampel filter and no length data.
 
 ```{r ec}
 read_inputs <- function(files, what) {
@@ -78,13 +84,15 @@ dummy_ok <- file.exists(seapodym_dummy)
 if (any(!dummy_ok)) message("Dummy files not found, skipped: ", paste(seapodym_dummy[!dummy_ok], collapse = ", "))
 CE_dummy <- bind_rows(lapply(names(seapodym_dummy)[dummy_ok], function(n)
 	readRDS(seapodym_dummy[[n]]) |>
-		transmute(source = n, yr = year(ymd), mm = month(ymd), dd = 15,
+		mutate(source = if ("reason" %in% names(pick(everything()))) paste0(n, ": ", reason) else n) |>
+		transmute(source, yr = year(ymd), mm = month(ymd), dd = 15,
 				  lat = roundTo2.5(latCent), lon = roundTo2.5(lonCent),
 				  res = 5, E = 0, C = .data[[sp_w]]))) |>
 	filter(C > 0)
 dummy_tab <- CE_dummy |> group_by(source) |>
 	summarise(records = n(), catch = round(sum(C), 1), .groups = "drop")
-knitr::kable(dummy_tab, caption = paste0("Dummy fishery D: catch without effort (", species, ", mt) by origin"))
+names(dummy_tab)[3] <- paste(species, "catch (mt)")
+ktab(dummy_tab, caption = "Dummy fishery D by origin")
 if (nrow(CE_dummy)) CE_list[["D"]] <- CE_dummy |> mutate(f = 1, gr = "D", gear = "D") |> dplyr::select(-source)
 
 # fishery labels: gear code + number, numbered in the order of the gears
@@ -105,7 +113,7 @@ CE_all <- bind_rows(lapply(CE_list, function(d)
 	filter(inYears(yr))
 
 n_before <- CE_all |> group_by(f2) |> summarise(records_in = n(), catch_in = sum(C), .groups = "drop")
-CE_all <- apply_seapodym_mask(CE_all, mask, grid)
+invisible(utils::capture.output(CE_all <- apply_seapodym_mask(CE_all, mask, grid)))
 
 file_CE <- sprintf("%s/%s_catch_%sf_%s.txt", dest_folder_seapodym, sp, nb_f, seapodym_version)
 
@@ -115,16 +123,23 @@ CE_out <- CE_all |>
 	summarize(E = sum(E), C = sum(C), .groups = "drop") |>
 	dplyr::select(f, yr, mm, dd, gr, lat, lon, res, E, C) |>
 	arrange(f, yr, mm)
-format_EC(CE_out, file_CE)
+format_EC(CE_out, file_CE, progress = FALSE)
 
-ec_tab <- CE_out |> group_by(fishery = f, gr) |>
-	summarise(records = n(), effort = sum(E), catch = round(sum(C), 1),
+ec_tab <- CE_out |> group_by(fishery = f, gear = gr) |>
+	summarise(records = n(), effort = round(sum(E)), catch = round(sum(C), 1),
 			  years = paste(range(yr), collapse = "-"), .groups = "drop") |>
 	left_join(n_before |> rename(fishery = f2), by = "fishery") |>
-	mutate(catch_removed_by_mask = round(catch_in - catch, 1)) |>
-	dplyr::select(-catch_in)
-knitr::kable(ec_tab, caption = paste0("Fisheries in ", basename(file_CE), " (catch: ", species, ", mt)"))
+	mutate(removed = round(catch_in - catch, 1)) |>
+	dplyr::select(fishery, gear, records, effort, catch, removed, years)
+names(ec_tab)[5:6] <- c(paste(species, "catch (mt)"), "removed by mask (mt)")
+ktab(ec_tab, caption = "Fisheries in the catch-effort file (effort: unit of the gear)")
+mask_txt <- sprintf("Mask: %s records and %s mt of %s catch removed (on land or outside the domain), %.2f%% of the catch.",
+					format(sum(n_before$records_in) - nrow(CE_all), big.mark = ","),
+					format(round(sum(n_before$catch_in) - sum(CE_all$C), 1), big.mark = ","), species,
+					100 * (1 - sum(CE_all$C) / sum(n_before$catch_in)))
 ```
+
+Catch-effort file: `r basename(file_CE)`. `r mask_txt`
 
 # LF data
 
@@ -166,16 +181,20 @@ LF_all_gr <- bind_rows(LF_list) |>
 	arrange(yr, qtr, mm, f, lon_from, lon_to, lat_from, lat_to)
 
 format_LF(LF_all_gr, file = file_LF, file_regions = file_LF_regions,
-		  length_bins = length_bins, min_len = min_len)
+		  length_bins = length_bins, min_len = min_len, progress = FALSE)
 
-knitr::kable(LF_all_gr |> group_by(fishery = f) |>
-			 	summarise(samples = n(), years = paste(range(yr), collapse = "-"), .groups = "drop"),
-			 caption = paste("Length samples per fishery in", basename(file_LF)))
+ktab(LF_all_gr |> mutate(fishery = factor(f, levels = fisheries)) |>
+	 	group_by(fishery) |>
+	 	summarise(samples = n(), years = paste(range(yr), collapse = "-"), .groups = "drop") |>
+	 	mutate(fishery = as.character(fishery)),
+	 caption = "Length samples per fishery in the length-frequency file")
 ```
+
+Length-frequency file: `r basename(file_LF)`.
 
 # Readme
 
-```{r readme}
+```{r readme, comment = ""}
 code_version <- tryCatch(
 	system2("git", c("-C", here::here(), "rev-parse", "HEAD"), stdout = TRUE, stderr = FALSE),
 	error = function(e) NA_character_, warning = function(w) NA_character_)
@@ -198,7 +217,7 @@ Longline fisheries
   scenario:             %s, K = %s, %s
   incomplete records:   %s, prior %s (%s), reference years from the clustering
   delta:                reconciled per %s, logbook mix from coverage >= %s, thr_E = %s
-Other gears:            %s; %s
+Other gears:            %s; fisheries %s, other gears to D
 Dummy fishery D:        catch without effort from %s
 Hampel-adjusted effort: %s
 
@@ -221,7 +240,8 @@ Length frequency data:  %s
 	assign_method, assign_prior, paste(sapply(assign_prior_tiers, paste, collapse = " x "), collapse = " > "),
 	paste(assign_delta_group, collapse = " x "), assign_delta_coverage, thr_E,
 	if (is.null(oth_gears)) "all gears except L, S, P" else paste(oth_gears, collapse = ", "),
-	if (is.null(oth_fisheries)) "one fishery per gear" else "oth_fisheries",
+	if (is.null(oth_fisheries)) "one fishery per gear" else
+		paste(paste(names(oth_fisheries), sapply(oth_fisheries, paste, collapse = "+"), sep = ": "), collapse = "; "),
 	paste(names(seapodym_dummy)[dummy_ok], collapse = ", "),
 	hampel_adjusted_effort,
 	bin_len, min_len, max_len, lf_max_fish,

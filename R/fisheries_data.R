@@ -1882,12 +1882,14 @@ summarise_region <- function(df, lat_col, lon_col, value_col = NULL) {
 #'   \code{yr}, \code{mm}, \code{dd}, \code{gr}, \code{lat}, \code{lon},
 #'   \code{res}, \code{E}, \code{C}.
 #' @param file Path to the output text file for the SEAPODYM CE data.
+#' @param progress Logical; show a progress bar. Default \code{interactive()}
+#'   (no bar when a report is rendered).
 #'
 #' @return Invisibly \code{NULL}. Called for its side effects: writes
 #'   \code{file} (tab-delimited text).
 #'
 #' @export
-format_EC <- function(df, file){
+format_EC <- function(df, file, progress = interactive()){
 		nb_fisheries <- length(unique(df$f))
 		nb_records <- df %>%
 			group_by(f) %>%
@@ -1898,10 +1900,10 @@ format_EC <- function(df, file){
 		cat(sprintf("%s\n", nb_fisheries), file=file)
 		cat(sprintf("%s\n", paste(nb_records, collapse="\t")), file=file, append=T)
 		cat("f\tyr\tmm\tdd\tgr\tlat\tlon\tres\tE\tC\n", file=file, append=T)
-		pb<-txtProgressBar(style=3)
 		nr <- nrow(df)
+		if (progress) pb <- txtProgressBar(style=3)
 		for (i in 1:nr){
-			setTxtProgressBar(pb,i/nr)
+			if (progress) setTxtProgressBar(pb,i/nr)
 			cat(paste(df[i,], collapse="\t"), file=file, append=T)
 			cat("\n", file=file, append=T)
 		}
@@ -1929,12 +1931,15 @@ format_EC <- function(df, file){
 #'   \code{file}.
 #' @param len_binsize Length bin size used in the header line written to
 #'   \code{file}. Default \code{1}.
+#' @param progress Logical; show a progress bar. Default \code{interactive()}
+#'   (no bar when a report is rendered).
 #'
 #' @return Invisibly \code{NULL}. Called for its side effects: writes
 #'   \code{file_regions} (RDS) and \code{file} (tab-delimited text).
 #'
 #' @export
-format_LF <- function(df, file, file_regions, length_bins, min_len, len_binsize=1){
+format_LF <- function(df, file, file_regions, length_bins, min_len, len_binsize=1,
+					  progress = interactive()){
 	tab <- df %>%
 		group_by(lon_from, lon_to, lat_from, lat_to) %>%
 		mutate(reg = cur_group_id()) %>% ungroup() %>%
@@ -1959,10 +1964,10 @@ format_LF <- function(df, file, file_regions, length_bins, min_len, len_binsize=
 	}
 	cat(sprintf("%s\t%s\t%s\n", length(length_bins), min_len, len_binsize), file=file, append=T)
 	cat(sprintf("yr\tqtr\tmo\tf\treg\tLF[1]\t..\tLF[%s]\n", length(length_bins)), file=file, append=T)
-	pb<-txtProgressBar(style=3)
 	nr <- nrow(tab)
+	if (progress) pb <- txtProgressBar(style=3)
 	for (i in 1:nr){
-		setTxtProgressBar(pb,i/nr)
+		if (progress) setTxtProgressBar(pb,i/nr)
 		cat(paste(tab[i,], collapse="\t"), file=file, append=T)
 		cat("\n", file=file, append=T)
 	}

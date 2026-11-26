@@ -103,6 +103,7 @@ table_info <- list(
 	lf_routing_unmatched = c("Length samples never matched", ""),
 	lf_raised_routing = c("Aggregated lengths routed to a fishery", ""),
 	fisheries = c("Fisheries", "After the Hampel filter."),
+	gear_route = c("Other gears and the fishery they go to", "Gears not in oth_fisheries, and records without effort, go to the dummy fishery D."),
 	weight_extrapolation = c("Weight extrapolation", "Monthly records with a missing weight, filled with n x mean weight per fish (same month and 5 deg cell)."),
 	LF_regions = c("Aggregated LF regions", "Regions entirely on land are excluded from the length weighting."),
 	lf_coverage = c("Source of the mean length", "Monthly operational records by matching tier."),

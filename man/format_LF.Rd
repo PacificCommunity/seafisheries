@@ -4,7 +4,15 @@
 \alias{format_LF}
 \title{Convert length-frequency data to SEAPODYM LF format}
 \usage{
-format_LF(df, file, file_regions, length_bins, min_len, len_binsize = 1)
+format_LF(
+  df,
+  file,
+  file_regions,
+  length_bins,
+  min_len,
+  len_binsize = 1,
+  progress = interactive()
+)
 }
 \arguments{
 \item{df}{A data frame containing at minimum the columns
@@ -26,6 +34,9 @@ number of length classes written to the header of \code{file}.}
 
 \item{len_binsize}{Length bin size used in the header line written to
 \code{file}. Default \code{1}.}
+
+\item{progress}{Logical; show a progress bar. Default \code{interactive()}
+(no bar when a report is rendered).}
 }
 \value{
 Invisibly \code{NULL}. Called for its side effects: writes

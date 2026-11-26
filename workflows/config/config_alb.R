@@ -116,7 +116,11 @@ rerun_hampel_opr <- TRUE
 # ---- Other gears (other.qmd) ------------------------------------------------------
 # Gears other than longline (L), purse seine (S) and pole-and-line (P).
 oth_gears     <- NULL   # gear codes kept, e.g. c("T", "G"); NULL = all of them
-oth_fisheries <- NULL   # NULL = one fishery per gear; or e.g. list(troll = "T", net = c("G", "D"))
+# Fisheries of the other gears: name = gear code written for SEAPODYM (gr
+# column), value = gear codes it holds. Gears not listed go to the dummy
+# fishery D (catch removal only). NULL = one fishery per gear, every gear kept.
+# Merging, e.g.: list(G = c("G", "H"), T = "T")
+oth_fisheries <- list(G = "G", T = "T")
 
 # ---- SEAPODYM formatting (format_seapodym.qmd) -------------------------------------
 seapodym_version <- "v1"
@@ -137,18 +141,20 @@ length_bins <- as.character(seq(min_len, max_len, by = bin_len))
 # Gear outputs, in fishery order. Missing files are skipped (with a message).
 # Fishery labels: gear code + number, numbered across gears in this order.
 seapodym_inputs <- list(
-	S = list(ec = file.path(save_folder, "PS", "PS_EC_hampel.RDS"),
-			 lf = file.path(save_folder, "PS", "PS_LF_hampel.RDS")),
-	P = list(ec = file.path(save_folder, "PL", "PL_EC_hampel.RDS"),
-			 lf = file.path(save_folder, "PL", "PL_LF_hampel.RDS")),
-	O = list(ec = file.path(save_folder, "OTH", "OTH_EC_hampel.RDS"),
-			 lf = file.path(save_folder, "OTH", "OTH_LF_hampel.RDS")),
 	L = list(ec = file.path(save_folder, "LL_fisheries", fisheries_tag,
 							c("LL_EC_hampel_opr.RDS", "LL_EC_hampel_raidelta.RDS")),
 			 lf = file.path(save_folder, "LL_fisheries", fisheries_tag,
-			 			   c("LL_LF_hampel_opr.RDS", "LL_LF_hampel_rai.RDS")))
+			 			   c("LL_LF_hampel_opr.RDS", "LL_LF_hampel_rai.RDS"))),
+	O = list(ec = file.path(save_folder, "OTH", "OTH_EC_hampel.RDS"),
+			 lf = file.path(save_folder, "OTH", "OTH_LF_hampel.RDS")),
+	S = list(ec = file.path(save_folder, "PS", "PS_EC_hampel.RDS"),
+			 lf = file.path(save_folder, "PS", "PS_LF_hampel.RDS")),
+	P = list(ec = file.path(save_folder, "PL", "PL_EC_hampel.RDS"),
+			 lf = file.path(save_folder, "PL", "PL_LF_hampel.RDS"))
 )
-# Catch without effort of every gear -> one dummy fishery (gear D, catch removal only).
+# Catch without effort of every gear, and the catch of the other gears not in
+# oth_fisheries -> one dummy fishery, last (gear D, catch removal only, no
+# Hampel filter, no LF).
 # Raised longline records without effort (LL_rai_dummy.RDS) are not included, as in
 # the original: their catch may already be in the logbook dummies.
 seapodym_dummy <- c(
