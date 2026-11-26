@@ -111,9 +111,11 @@ oth_fisheries <- NULL   # NULL = one fishery per gear; or e.g. list(troll = "T",
 
 # ---- SEAPODYM formatting (format_seapodym.qmd) -------------------------------------
 seapodym_version <- "v1"
-# parfile of the SEAPODYM configuration: domain, resolution, mask (strdir/str_file_mask)
-seapodym_parfile   <- here::here("data-raw", "seapodym", "alb_sp_parfile.xml")
-seapodym_mask_file <- NULL               # NULL = strdir/str_file_mask of the parfile
+# SEAPODYM grid: domain = stock_domain (cell edges, as latitudeMin/Max and
+# longitudeMin/Max of the parfile), resolution in degrees (parfile deltaX / 60)
+seapodym_res       <- 2
+# mask of the SEAPODYM configuration (0 = land), one row per latitude, north first
+seapodym_mask_file <- "/opt/shared/SEAPODYM/data/forcings/run-jra55npv2_2x30d-sp/mask_jra55np_2deg_sp_cor.txt"
 dest_folder_seapodym <- here::here("data-raw", "seapodym", tolower(species), seapodym_version)
 seapodym_years <- NULL                   # e.g. c(1980, 2022); NULL = all years
 hampel_adjusted_effort <- TRUE           # TRUE: effort adjusted by the Hampel filter

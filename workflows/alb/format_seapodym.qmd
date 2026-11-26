@@ -26,18 +26,20 @@ dir.create(dest_folder_seapodym, recursive = TRUE, showWarnings = FALSE)
 
 # Model grid and mask
 
-Domain, resolution and mask of the SEAPODYM configuration (`seapodym_parfile`).
+Domain (`stock_domain`), resolution (`seapodym_res`) and mask
+(`seapodym_mask_file`) of the SEAPODYM configuration, from the config.
 Catch-effort records on land or outside the domain are removed: a record is
 kept if a sea cell of the model covers it.
 
 ```{r grid}
-grid <- read_parfile_grid(seapodym_parfile)
-mask <- read_seapodym_mask(grid, mask_file = if (is.null(seapodym_mask_file)) grid$mask_file else seapodym_mask_file)
+grid <- make_seapodym_grid(stock_domain$lat, stock_domain$lon, seapodym_res, mask_file = seapodym_mask_file)
+# stops if the mask does not have one value per cell of the grid
+mask <- read_seapodym_mask(grid)
 knitr::kable(data.frame(
-	item = c("latitude (edges)", "longitude (edges)", "resolution (deg)", "cells", "sea cells", "parfile run"),
+	item = c("latitude (edges)", "longitude (edges)", "resolution (deg)", "cells", "sea cells", "mask"),
 	value = c(paste(grid$lat, collapse = " to "), paste(grid$lon, collapse = " to "), grid$res,
 			  nrow(mask), sum(mask$value > 0),
-			  paste(grid$first_date, grid$last_date, sep = " to "))),
+			  seapodym_mask_file)),
 	caption = "SEAPODYM grid")
 
 inYears <- function(yr) if (is.null(seapodym_years)) rep(TRUE, length(yr)) else
@@ -188,7 +190,7 @@ seafisheries code version: %s
 SQL download: %s
 Processed data: %s
 Stock domain: lat %s, lon %s (cell edges)
-SEAPODYM parfile: %s (grid %s deg)
+SEAPODYM grid: %s deg, mask %s
 Years: %s
 
 Longline fisheries
@@ -210,7 +212,7 @@ Length frequency data:  %s
 ",
 	species, seapodym_version, Sys.Date(), code_version[1], request_tag, save_folder,
 	paste(stock_domain$lat, collapse = " to "), paste(stock_domain$lon, collapse = " to "),
-	seapodym_parfile, grid$res,
+	grid$res, seapodym_mask_file,
 	if (is.null(seapodym_years)) "all" else paste(seapodym_years, collapse = "-"),
 	cluster_file, if (file.exists(cluster_file)) format(file.info(cluster_file)$mtime) else "not found",
 	fisheries_tag, k_opr,

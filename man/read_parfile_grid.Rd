@@ -24,6 +24,7 @@ Reads the domain, resolution and mask file of a SEAPODYM parameter file
 Other seapodym formatting:
 \code{\link[=apply_seapodym_mask]{apply_seapodym_mask()}},
 \code{\link[=expand_lf_regions]{expand_lf_regions()}},
+\code{\link[=make_seapodym_grid]{make_seapodym_grid()}},
 \code{\link[=read_seapodym_mask]{read_seapodym_mask()}}
 }
 \concept{seapodym formatting}

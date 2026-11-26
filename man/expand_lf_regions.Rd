@@ -28,6 +28,7 @@ model cell can be merged.
 \seealso{
 Other seapodym formatting:
 \code{\link[=apply_seapodym_mask]{apply_seapodym_mask()}},
+\code{\link[=make_seapodym_grid]{make_seapodym_grid()}},
 \code{\link[=read_parfile_grid]{read_parfile_grid()}},
 \code{\link[=read_seapodym_mask]{read_seapodym_mask()}}
 }

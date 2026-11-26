@@ -23,6 +23,7 @@ SEAPODYM mask as a table of cells
 Other seapodym formatting:
 \code{\link[=apply_seapodym_mask]{apply_seapodym_mask()}},
 \code{\link[=expand_lf_regions]{expand_lf_regions()}},
+\code{\link[=make_seapodym_grid]{make_seapodym_grid()}},
 \code{\link[=read_parfile_grid]{read_parfile_grid()}}
 }
 \concept{seapodym formatting}

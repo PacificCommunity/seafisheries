@@ -51,6 +51,32 @@ read_parfile_grid <- function(parfile) {
 }
 
 
+#' Model grid from a domain and a resolution
+#'
+#' Same structure as [read_parfile_grid()], built from values given directly
+#' (e.g. in the workflow config) instead of a parfile.
+#'
+#' @param lat,lon Numeric vectors of length 2; domain as cell EDGES (as
+#'   latitudeMin/Max, longitudeMin/Max in a SEAPODYM parfile).
+#' @param res Numeric; cell size in degrees.
+#' @param mask_file Character; path to the mask text file of the model.
+#'
+#' @return A grid list, as [read_parfile_grid()] (dates NA).
+#'
+#' @family seapodym formatting
+#' @export
+make_seapodym_grid <- function(lat, lon, res, mask_file = NA_character_) {
+	n <- c(diff(lat), diff(lon)) / res
+	if (any(abs(n - round(n)) > 1e-8) || any(n <= 0))
+		stop("The domain (lat ", paste(lat, collapse = " to "), ", lon ", paste(lon, collapse = " to "),
+			 ") is not a whole number of ", res, " deg cells")
+	list(lat = lat, lon = lon, res = res,
+		 lat_centres = seq(lat[1] + res / 2, lat[2] - res / 2, by = res),
+		 lon_centres = seq(lon[1] + res / 2, lon[2] - res / 2, by = res),
+		 mask_file = mask_file, first_date = as.Date(NA), last_date = as.Date(NA))
+}
+
+
 #' SEAPODYM mask as a table of cells
 #'
 #' @param grid A grid from [read_parfile_grid()].

@@ -35,6 +35,7 @@ cell, or any model cell whose centre lies inside it when it is larger
 \seealso{
 Other seapodym formatting:
 \code{\link[=expand_lf_regions]{expand_lf_regions()}},
+\code{\link[=make_seapodym_grid]{make_seapodym_grid()}},
 \code{\link[=read_parfile_grid]{read_parfile_grid()}},
 \code{\link[=read_seapodym_mask]{read_seapodym_mask()}}
 }
