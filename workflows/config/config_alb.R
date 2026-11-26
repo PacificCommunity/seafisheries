@@ -81,6 +81,11 @@ assign_prior       <- "tiered"             # "tiered", "global" or "equal"
 assign_prior_tiers <- list(c("flag", "year"), "flag")
 assign_prior_min_n <- 30
 assign_fit_years   <- NULL                 # NULL = fit years of the clustering
+# Clustering variables that can be missing in a record (operation-level
+# information, absent from some logbooks and from the raised data). Only those
+# used by the scenario count; the species fractions and latitude are computed
+# from the catch and position of every record.
+assign_missing_vars <- c("mean_hbf", "hbf_cat", "mean_len")
 
 # Delta (raised - operational)
 assign_delta_group    <- c("flag", "year") # reconciliation: operational + delta = raised per group
@@ -103,6 +108,10 @@ plot_years <- c(1980, 2022)
 # Hampel filter
 hampel_EC <- list(year_window = 5, radius_km = 250, k = 7)
 hampel_LF <- list(month_window = 6, k = 7)
+# FALSE: LL_fisheries.qmd reuses LL_EC_hampel_opr.RDS of a previous run instead
+# of rerunning the (slow) Hampel filter on the operational records. For
+# testing only: the file must come from a run with the same fisheries.
+rerun_hampel_opr <- TRUE
 
 # ---- Other gears (other.qmd) ------------------------------------------------------
 # Gears other than longline (L), purse seine (S) and pole-and-line (P).

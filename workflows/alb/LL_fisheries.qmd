@@ -8,6 +8,10 @@ format:
     toc: true
     number-sections: true
     colorlinks: true
+header-includes:
+  - \usepackage{booktabs}
+  - \usepackage{longtable}
+  - \usepackage{float}
 ---
 
 ```{r setup, echo = F, warning = F, message = F}
@@ -44,45 +48,47 @@ cluster_diag <- readRDS(cluster_file)
 scenario     <- cluster_diag$scenario
 clust_vars   <- cluster_diag$pca_select
 fit_years    <- if (is.null(assign_fit_years)) cluster_diag$fit_years else assign_fit_years
+miss_vars    <- intersect(clust_vars, assign_missing_vars)   # clustering variables that can be missing
+if (!length(miss_vars)) stop("None of assign_missing_vars (config) is a clustering variable of ", scenario)
 
 diagAdd("tables", "settings", data.frame(
 	setting = c("cluster file", "scenario", "variables", "K", "merged", "assignment",
 				"prior", "prior tiers", "reference years"),
-	value = c(cluster_file, scenario, paste(clust_vars, collapse = ", "), k_opr,
+	value = c(sub(paste0("^", here::here(), "/"), "", cluster_file), scenario, paste(clust_vars, collapse = ", "), k_opr,
 			  if (is.null(merge_clusters)) "none" else
 			  	paste(names(merge_clusters), sapply(merge_clusters, paste, collapse = "+"), sep = " <- ", collapse = "; "),
 			  assign_method, assign_prior,
 			  paste(sapply(assign_prior_tiers, paste, collapse = " x "), collapse = " > "),
 			  paste(fit_years, collapse = "-"))))
-knitr::kable(.diag$tables$settings, caption = "Settings")
+ktab(.diag$tables$settings, caption = "Settings")
 ```
 
 # Fishery assignment
 
-**What is done.** The fisheries are the clusters of the longlineTypology run
-(`cluster_file`). Each monthly operational record (vessel x month x 1 deg cell)
-gets a fishery in one of two ways:
+The fisheries are the clusters of the clustering run (`cluster_file`), built on
+the variables `r paste(clust_vars, collapse = ", ")`. Each monthly operational
+record (vessel x month x 1 deg cell) and each raised record (flag x month x
+5 deg cell) gets a fishery:
 
-1. *Records with every clustering variable* get the nearest k-means centroid of
-   the clustering (same as the original code).
-2. *Records without a valid HBF* get the fishery most likely given the
-   variables they have (species composition, latitude) and their flag and year.
-   The model is a discriminant analysis learnt on the complete records of the
-   reference years. The discriminant analysis is the model written for the
-   raised records in the original code (`raisedFit()` / `assignRaised()`); using
-   it for the operational records, instead of imputing HBF (`imputation.qmd`),
-   and the flag x year prior are new.
+1. **Records with every clustering variable** get the fishery of the nearest
+   cluster centre, exactly as in the clustering.
+2. **Records with a variable missing** (`r paste(miss_vars, collapse = ", ")`)
+   get the most likely fishery given the variables they have and their flag
+   and year. Raised records never have these variables and are all assigned
+   this way.
 
-Raised records (no HBF either) are assigned with the same model.
+**Discriminant model.** Learnt on the complete records of the reference years
+(`r paste(fit_years, collapse = "-")`), whose fishery is known: the mean of
+each variable per fishery (the fishery centre) and the spread of the variables
+within the fisheries. A record is compared with each fishery centre on the
+variables it has, the distance accounting for that spread (a gap counts less
+along a variable that varies a lot within the fisheries).
 
-**How it is checked.** Complete records have a known fishery (k-means): they
-are assigned again as if HBF were missing, and the result is compared with
-their k-means fishery. The two checks of the original code (`raisedCheck()`,
-defined but not run there) are run here: records with HBF hidden, and records
-aggregated like raised data. New: agreement with k-means with every variable,
-reliability of the assignment probability, expected accuracy of the records
-actually assigned, and the flag x decade breakdown. All accuracies are shares
-of effort.
+**Prior.** When the variables a record has cannot tell two fisheries apart,
+the prior decides: each fishery is weighted by its share of the effort of the
+complete records of the same flag and year. If that flag and year has fewer
+than `r assign_prior_min_n` complete records, the share of the flag over all
+years is used, and otherwise the share over all flags.
 
 ```{r opr_kmeans}
 opr <- inp("LL_EC_LF_mm.RDS") |>
@@ -95,47 +101,13 @@ complete  <- !is.na(opr$cluster_km)
 diagAdd("tables", "label_map", label_map)
 diagAdd("tables", "input_check", attr(opr$cluster_km, "input_check"))
 if (!is.null(merge_clusters))
-	knitr::kable(label_map, caption = "Cluster numbers: saved, after merging, fishery")
+	ktab(label_map, caption = "Cluster numbers: saved, after merging, fishery")
 
 yr  <- year(opr$ymd)
 ref <- complete & yr >= fit_years[1] & yr <= fit_years[2]
 fit <- fit_assignment(opr[ref, ], opr$cluster_km[ref], vars = clust_vars,
 					  prior = assign_prior, prior_tiers = assign_prior_tiers,
 					  prior_min_n = assign_prior_min_n, scenario = scenario)
-```
-
-```{r opr_checks}
-hide_vars <- intersect(c("mean_hbf", "hbf_cat"), clust_vars)
-
-# 1. every variable: does the discriminant model reproduce k-means?
-chk_all <- check_assignment(fit, opr[ref, ], opr$cluster_km[ref], weight_col = "E",
-							method = assign_method)
-# 2. HBF hidden, for each prior (the configured one is used below)
-priors <- unique(c("equal", "global", assign_prior))
-chk_hide <- lapply(priors, function(pr)
-	check_assignment(fit, opr[ref, ], opr$cluster_km[ref], hide = hide_vars, weight_col = "E",
-					 by = "flag", method = assign_method, prior = pr))
-names(chk_hide) <- priors
-chk <- chk_hide[[assign_prior]]
-# 3. by flag x decade, on all complete records (decades outside the reference
-# years are an out-of-sample test)
-chk_dec <- check_assignment(fit, opr[complete, ], opr$cluster_km[complete], hide = hide_vars,
-							weight_col = "E", by = c("flag", "decade"),
-							method = assign_method, prior = assign_prior)
-# 4. records aggregated like raised data (flag x month x 5 deg)
-chk_strata <- check_strata_assignment(fit, opr[ref, ], opr$cluster_km[ref], res = 5,
-									  method = assign_method, prior = assign_prior)
-
-acc <- data.frame(test = c("all variables", paste0(paste(hide_vars, collapse = ", "), " hidden, prior ", priors)),
-				  accuracy = round(unname(c(chk_all$accuracy, sapply(chk_hide, `[[`, "accuracy"))), 4))
-conf <- as.data.frame.matrix(chk$confusion)
-diagAdd("tables", "assignment_accuracy", acc)
-diagAdd("tables", "assignment_by_fishery", chk$by_cluster)
-diagAdd("tables", "assignment_confusion", cbind(kmeans = rownames(conf), conf))
-diagAdd("tables", "assignment_calibration", chk$calibration)
-diagAdd("tables", "strata_accuracy", data.frame(accuracy = round(chk_strata$accuracy, 4)))
-diagAdd("tables", "strata_by_purity", chk_strata$by_purity)
-diagAdd("tables", "strata_by_fishery", chk_strata$by_cluster)
 ```
 
 ```{r opr_assign}
@@ -151,134 +123,117 @@ if (any(is.na(opr$f)))
 f_summary <- opr |>
 	group_by(f, f_source) |>
 	summarise(records = n(), effort = sum(E), catch = sum(.data[[sp_w]], na.rm = TRUE),
-			  low_prob = sum(f_prob < 0.8, na.rm = TRUE), .groups = "drop") |>
+			  .groups = "drop") |>
 	mutate(effort_share = round(effort / sum(effort), 4))
 diagAdd("tables", "opr_fisheries", as.data.frame(f_summary))
 diagAdd("tables", "opr_prior_tiers", as.data.frame(table(prior_tier = a_opr$prior_tier, useNA = "ifany")))
 saveIt(opr |> dplyr::select(row_id, f, f_source, f_prob), "LL_opr_fisheries.RDS")
 
-# expected accuracy of the records actually assigned = their mean probability
-asg <- opr[!complete & !is.na(opr$f), ]
-asg$decade <- 10L * (year(asg$ymd) %/% 10L)
-exp_by <- function(d, g) d |>
-	group_by(across(all_of(g))) |>
-	summarise(assigned_effort = sum(E), expected_accuracy = round(sum(E * f_prob) / sum(E), 4),
-			  low_prob_effort = round(sum(E[f_prob < 0.8]) / sum(E), 4), .groups = "drop")
-exp_all <- data.frame(assigned_effort = sum(asg$E),
-					  pct_of_effort = round(100 * sum(asg$E) / sum(opr$E), 2),
-					  expected_accuracy = round(sum(asg$E * asg$f_prob) / sum(asg$E), 4))
-exp_flag <- opr |>
-	group_by(flag) |>
-	summarise(effort = sum(E), pct_assigned = round(100 * sum(E[f_source == "assigned"]) / sum(E), 1),
-			  .groups = "drop") |>
-	left_join(exp_by(asg, "flag"), by = "flag") |>
-	left_join(chk$by_group |> dplyr::select(flag, test_accuracy = accuracy), by = "flag") |>
-	arrange(desc(assigned_effort))
-exp_dec <- exp_by(asg, c("flag", "decade")) |>
-	mutate(key = paste(flag, decade, sep = " | ")) |>
-	left_join(chk_dec$by_group |> rename(key = `flag | decade`) |>
-			  	dplyr::select(key, test_accuracy = accuracy), by = "key") |>
-	dplyr::select(-key) |>
-	mutate(share_of_assigned = round(assigned_effort / sum(assigned_effort), 4)) |>
-	arrange(flag, decade)
-diagAdd("tables", "assigned_expected_accuracy", exp_all)
-diagAdd("tables", "assigned_by_fishery", as.data.frame(exp_by(asg, "f")))
-diagAdd("tables", "assigned_by_flag", as.data.frame(exp_flag))
-diagAdd("tables", "assigned_by_flag_decade", as.data.frame(exp_dec))
+# Which variables are missing, operational and raised records
+rai <- inp("LL_EC_rai.RDS") |>
+	assignment_vars(scenario, lat_col = "latCent")
+pct_missing <- function(d, v) if (!v %in% names(d)) 100 else
+	round(100 * sum(d$E[is.na(d[[v]])]) / sum(d$E), 1)
+missing_tab <- data.frame(
+	variable = miss_vars,
+	operational = sapply(miss_vars, pct_missing, d = opr),
+	raised = sapply(miss_vars, pct_missing, d = rai), row.names = NULL)
+names(missing_tab)[2:3] <- c("operational (% effort)", "raised (% effort)")
+diagAdd("tables", "assignment_missing", missing_tab)
+ktab(missing_tab, caption = "Clustering variables missing")
 ```
 
-## Can the assignment be trusted?
+## Checks
 
-Each line is one check; the guide values are rules of thumb, not statistical
-thresholds. The details follow.
+The complete records have a known fishery. They are assigned again with the
+model as if they lacked the variables that are missing elsewhere, and the
+result is compared with their known fishery. Two tests (all shares are shares
+of effort):
 
-```{r trust_summary}
-cal <- chk$calibration
-cal_gap <- max(abs(cal$accuracy - cal$mean_prob)[cal$weight_share >= 0.01], na.rm = TRUE)
-worst <- chk$by_cluster[which.min(chk$by_cluster$recall), ]
-worst_r <- chk_strata$by_cluster[which.min(chk_strata$by_cluster$recall), ]
-pure <- chk_strata$strata[chk_strata$strata$purity > 0.75, ]
-acc_pure <- sum(pure$E * (!is.na(pure$assigned) & pure$assigned == pure$cluster)) / sum(pure$E)
-weak <- exp_dec |> filter(is.na(test_accuracy) | test_accuracy < 0.8)
-ic <- attr(opr$cluster_km, "input_check")
+* **Records**: each complete record with the missing variables hidden, as for
+  the operational records that lack them. One test per combination of missing
+  variables holding at least 1% of the effort of those records.
+* **Raised-like**: complete records summed per flag x month x 5 deg cell, as
+  in the raised data, and assigned with the variables the raised data have. A
+  cell is counted right when it gets the fishery with most effort in it.
 
-trust <- data.frame(
-	check = c(
-		"Clustering variables built as in the clustering data (largest |scaled mean|)",
-		"Model reproduces k-means when nothing is missing",
-		"Records without HBF assigned to the right fishery (test)",
-		"Assignment probability is reliable (largest gap accuracy vs probability)",
-		"Operational effort assigned without HBF (share)",
-		"Expected accuracy of those assigned records",
-		paste0("Weakest fishery without HBF (recall, fishery ", worst$cluster, ")"),
-		"Raised-like records assigned to their main fishery (all cells)",
-		"Raised-like records, cells with one main fishery (purity > 0.75)",
-		paste0("Weakest fishery, raised-like (recall, fishery ", worst_r$cluster, ")"),
-		"Assigned effort in flag-decades not tested or with test accuracy < 0.8"),
-	value = round(c(max(abs(ic$mean_scaled)), chk_all$accuracy, chk$accuracy, cal_gap,
-					exp_all$pct_of_effort / 100, exp_all$expected_accuracy, worst$recall,
-					chk_strata$accuracy, acc_pure, worst_r$recall, sum(weak$share_of_assigned)), 3),
-	guide = c("< 0.5", ">= 0.90", ">= 0.85", "<= 0.05", "", ">= 0.85", ">= 0.75", "", ">= 0.90", ">= 0.75", "<= 0.10"))
-trust$ok <- mapply(function(v, g) {
-	if (!nzchar(g)) return("")
-	thr <- as.numeric(sub("^[<>=]+ ", "", g))
-	ok <- if (startsWith(g, ">")) v >= thr else v <= thr
-	if (ok) "yes" else "CHECK"
-}, trust$value, trust$guide)
-diagAdd("tables", "assignment_trust", trust)
-knitr::kable(trust, caption = "Fishery assignment: summary of the checks")
+```{r opr_checks}
+# combinations of missing variables among the records assigned by the model
+mp <- opr[!complete & !is.na(opr$f), c(miss_vars, "E"), drop = FALSE]
+mp$hide <- apply(is.na(mp[, miss_vars, drop = FALSE]), 1, function(z) paste(miss_vars[z], collapse = ", "))
+patterns <- mp |> filter(hide != "") |> group_by(hide) |>
+	summarise(share = sum(E), .groups = "drop") |>
+	mutate(share = share / sum(share)) |>
+	filter(share >= 0.01) |> arrange(desc(share))
+
+chk_rec <- lapply(patterns$hide, function(h)
+	check_assignment(fit, opr[ref, ], opr$cluster_km[ref], hide = strsplit(h, ", ")[[1]],
+					 weight_col = "E", method = assign_method, prior = assign_prior))
+chk <- chk_rec[[1]]   # main combination: per fishery and confusion
+chk_strata <- check_strata_assignment(fit, opr[ref, ], opr$cluster_km[ref], res = 5,
+									  method = assign_method, prior = assign_prior)
+
+acc <- data.frame(
+	test = c(rep("records", nrow(patterns)), "raised-like"),
+	hidden = c(patterns$hide, paste(miss_vars[sapply(miss_vars, pct_missing, d = rai) > 0], collapse = ", ")),
+	share = c(round(100 * patterns$share, 1), NA),
+	accuracy = round(100 * c(sapply(chk_rec, `[[`, "accuracy"), chk_strata$accuracy), 1))
+names(acc)[3:4] <- c("% of assigned effort", "accuracy (%)")
+diagAdd("tables", "assignment_accuracy", acc)
+ktab(acc, caption = "Share of effort assigned to the right fishery")
 ```
 
 **Per fishery.** Recall: share of a fishery's effort that the test gives back
-to it. Precision: share of the effort the test gives to a fishery that really
-belongs to it. Expected accuracy: mean assignment probability of the records
-actually assigned to it.
+to it. A low recall matters most for the fisheries holding much of the
+`r species` catch or much assigned effort.
 
-```{r trust_fishery}
+```{r checks_fishery}
 fish_tab <- f_summary |>
 	group_by(f) |>
-	summarise(effort_share = round(sum(effort) / sum(f_summary$effort), 3),
-			  pct_assigned = round(100 * sum(effort[f_source == "assigned"]) / sum(effort), 1),
+	summarise(effort_pct = round(100 * sum(effort) / sum(f_summary$effort), 1),
+			  assigned_pct = round(100 * sum(effort[f_source == "assigned"]) / sum(effort), 1),
 			  catch = round(sum(catch)), .groups = "drop") |>
-	left_join(chk$by_cluster |> transmute(f = as.numeric(cluster), recall_noHBF = recall,
-										  precision_noHBF = precision), by = "f") |>
-	left_join(exp_by(asg, "f") |> dplyr::select(f, expected_accuracy), by = "f") |>
-	left_join(chk_strata$by_cluster |> transmute(f = as.numeric(cluster), recall_raised = round(recall, 3),
-												 precision_raised = round(precision, 3)), by = "f")
-names(fish_tab)[names(fish_tab) == "catch"] <- paste0(sp, "_catch_mt")
+	filter(!is.na(f)) |>
+	left_join(chk$by_cluster |> transmute(f = as.numeric(cluster), recall_records = round(100 * recall, 1)), by = "f") |>
+	left_join(chk_strata$by_cluster |> transmute(f = as.numeric(cluster), recall_raised = round(100 * recall, 1)), by = "f")
+names(fish_tab) <- c("fishery", "% of effort", "% assigned by model",
+					 paste(species, "catch (mt)"), "recall records (%)", "recall raised-like (%)")
 diagAdd("tables", "assignment_per_fishery", as.data.frame(fish_tab))
-knitr::kable(fish_tab, caption = "Per fishery: share of effort, % assigned without HBF, test without HBF, expected accuracy, test on raised-like records")
+ktab(fish_tab, caption = "Per fishery: effort, effort assigned by the model, catch and recall of the tests", small = FALSE)
 ```
 
-**Is the probability reliable?** Records of the test are grouped by their
-assignment probability: in each group, the share assigned correctly should be
-close to the mean probability. If so, the expected accuracies above can be
-trusted.
+**Confusion tables.** One row per known fishery, one column per fishery given
+by the test, in % of the row's effort: each row sums to 100. The diagonal is
+the recall. Off the diagonal, the cells show which fisheries are mistaken for
+each other: a large value in row 3, column 6 means that effort of fishery 3
+is often given to fishery 6.
 
-```{r trust_calibration}
-knitr::kable(cal, caption = "Test without HBF: accuracy by class of assignment probability")
+```{r checks_confusion}
+confTab <- function(conf) {
+	m <- unclass(as.matrix(conf))
+	m <- 100 * m / rowSums(m)
+	out <- data.frame(fishery = rownames(conf), round(m, 1), check.names = FALSE, row.names = NULL)
+	out
+}
+conf_rec <- confTab(chk$confusion)
+conf_str <- confTab(chk_strata$confusion)
+diagAdd("tables", "assignment_confusion", conf_rec)
+diagAdd("tables", "strata_confusion", conf_str)
+ktab(conf_rec, caption = paste0("Confusion, records (", patterns$hide[1], " hidden): known fishery in rows, given in columns, % of the row"), small = FALSE)
+ktab(conf_str, caption = "Confusion, raised-like: known fishery in rows, given in columns, % of the row", small = FALSE)
 ```
 
-**Where to be careful.** Flag-decades holding at least 1% of the assigned
-effort whose complete records were assigned with less than 80% accuracy in the
-test, or that have no complete record to test (NA): there, the fisheries are
-learnt from other years or flags.
+**Raised-like records by purity.** A raised record mixes the vessels of a flag
+in a 5 deg cell and month. Purity is the effort share of the main fishery of
+the cell. When several fisheries share a cell, one fishery cannot be right for
+all of it, so the accuracy drops with purity.
 
-```{r trust_weak}
-weak_tab <- weak |> filter(share_of_assigned >= 0.01) |>
-	dplyr::select(flag, decade, share_of_assigned, expected_accuracy, test_accuracy) |>
-	arrange(desc(share_of_assigned))
-diagAdd("tables", "assignment_weak_spots", as.data.frame(weak_tab))
-knitr::kable(weak_tab, caption = "Flag-decades to be careful with")
-```
-
-**Raised records.** A raised record mixes the vessels of a flag in a 5 deg
-cell and month. When several fisheries share a cell, a single fishery cannot
-be right for all of it: accuracy drops with purity (effort share of the main
-fishery of the cell).
-
-```{r trust_purity}
-knitr::kable(chk_strata$by_purity, digits = 3, caption = "Raised-like records: accuracy by purity")
+```{r checks_purity}
+pur <- chk_strata$by_purity |>
+	filter(!is.na(effort_share)) |>
+	transmute(purity = gsub("^[[(]|[])]$", "", sub(",", " - ", purity)), `% of effort` = round(100 * effort_share, 1), `accuracy (%)` = round(100 * accuracy, 1))
+diagAdd("tables", "strata_by_purity", pur)
+ktab(pur, caption = "Raised-like records: accuracy by purity")
 ```
 
 ```{r opr_ec}
@@ -391,21 +346,18 @@ diagAdd("tables", "lf_routing_conservation", data.frame(
 	samples_partial = sum(weight_sanity$total_weight > 0 & weight_sanity$total_weight < 0.99)))
 diagAdd("tables", "lf_routing_unmatched", as.data.frame(by_source))
 
-knitr::kable(structural, caption = "Length routing: structural checks (must be 0)")
-knitr::kable(.diag$tables$lf_routing_conservation, caption = "Length routing: fish measured vs routed to a fishery")
-knitr::kable(by_source, caption = "Samples never matched to an operational record, by source")
+ktab(structural, caption = "Length routing: structural checks (must be 0)")
+ktab(.diag$tables$lf_routing_conservation, caption = "Length routing: fish measured vs routed to a fishery")
+ktab(by_source, caption = "Samples never matched to an operational record, by source")
 ```
 
 # Raised fisheries
 
-Raised records (flag x month x 5 deg cell) have the species composition and
-latitude but no HBF. They are assigned with the same model as the operational
-records without HBF, using the cell centre latitude (checks: "Can the
-assignment be trusted?" above).
+Raised records (flag x month x 5 deg cell) are assigned with the model of
+the fishery assignment section, on the variables they have and the cell centre
+latitude (see the raised-like test in the checks).
 
 ```{r rai_assign}
-rai <- inp("LL_EC_rai.RDS") |>
-	assignment_vars(scenario, lat_col = "latCent")
 a_rai <- assign_records(fit, rai, method = assign_method, prior = assign_prior)
 rai$cluster <- a_rai$cluster
 rai$f_prob  <- a_rai$prob
@@ -507,8 +459,10 @@ check_tot <- do.call(rbind, lapply(c("E", sp_n, sp_w), function(v) {
 if (any(abs(check_tot$difference_minus_overshoot) > 1e-6 * pmax(1, check_tot$raised)))
 	diagWarn("delta", "operational + delta + dummy differs from raised beyond the reported overshoot")
 diagAdd("tables", "delta_totals", check_tot)
-knitr::kable(check_tot, digits = 1, caption = paste0(
-	"Totals (effort in hundreds of hooks, ", species, " catch in numbers and mt): outputs - raised = overshoot (flag-years where the logbooks exceed raised)"))
+tot_t <- data.frame(component = names(check_tot)[-1],
+					t(round(as.matrix(check_tot[, -1]), 1)), check.names = FALSE, row.names = NULL)
+names(tot_t)[-1] <- c("effort (100 hooks)", paste(species, "catch (n)"), paste(species, "catch (mt)"))
+ktab(tot_t, caption = "Totals: outputs - raised = overshoot (flag-years where the logbooks exceed the raised data)")
 
 # Overshoot: flag-years where the logbooks exceed the raised data
 os <- rec$groups |> filter(variable == sp_w, overshoot > 0) |>
@@ -518,7 +472,7 @@ diagAdd("tables", "delta_overshoot", as.data.frame(os))
 if (nrow(os))
 	diagWarn("delta", nrow(os), " flag-years where the logbooks exceed the raised ", species, " catch (",
 			 round(sum(os$overshoot), 1), " mt in total): logbooks kept, no delta")
-knitr::kable(head(os, 30), digits = 1, caption = paste0(
+ktab(head(os, 30), digits = 1, caption = paste0(
 	"Flag-years where the logbook ", species, " catch exceeds the raised catch (30 largest)"))
 
 # How the delta got its fishery
@@ -529,7 +483,7 @@ src <- delta_split |>
 			  catch = sum(.data[[sp_w]]), .groups = "drop") |>
 	mutate(catch_share = round(catch / sum(catch), 4))
 diagAdd("tables", "delta_sources", as.data.frame(src))
-knitr::kable(src, digits = 1, caption = paste0(
+ktab(src, digits = 1, caption = paste0(
 	"Delta by origin of its fishery (catch: ", species, ", mt); logbook mix from coverage >= ",
 	assign_delta_coverage))
 
@@ -552,7 +506,7 @@ flag_summary <- by_g("flag") |> arrange(desc(raised))
 year_summary <- by_g("year")
 diagAdd("tables", "delta_by_flag", as.data.frame(flag_summary))
 diagAdd("tables", "delta_by_year", as.data.frame(year_summary))
-knitr::kable(flag_summary, digits = 1, caption = paste0(species, " catch (mt) per flag"))
+ktab(flag_summary, digits = 1, caption = paste0(species, " catch (mt) per flag"))
 
 bind_rows(
 	year_summary |> transmute(year, C = raised, source = "Raised"),
@@ -621,7 +575,7 @@ LF_LLrai <- LFr_binned |>
 diagAdd("tables", "lf_raised_routing", data.frame(
 	fish_measured = round(sum(LFr_binned$count)), fish_routed = round(sum(LF_LLrai$count))) |>
 	mutate(pct_routed = round(100 * fish_routed / fish_measured, 1)))
-knitr::kable(.diag$tables$lf_raised_routing,
+ktab(.diag$tables$lf_raised_routing,
 			 caption = "Aggregated lengths routed to a fishery (the others: no catch of the species in their region)")
 
 saveIt(LF_LLrai, "LL_LF_rai_f.RDS")
@@ -634,8 +588,14 @@ saveIt(LF_LLrai, "LL_LF_rai_f.RDS")
 hampelCE <- function(d) do.call(apply_hampel, c(list(df = d, type = "CE"), hampel_EC))
 hampelLF <- function(d) do.call(apply_hampel, c(list(df = d, type = "LF"), hampel_LF))
 
-EC_f_hampel_opr <- runStep(EC_f_opr, "hampel_EC_opr", "Hampel filter", hampelCE)
-saveIt(EC_f_hampel_opr, "LL_EC_hampel_opr.RDS")
+if (rerun_hampel_opr) {
+	EC_f_hampel_opr <- runStep(EC_f_opr, "hampel_EC_opr", "Hampel filter", hampelCE)
+	saveIt(EC_f_hampel_opr, "LL_EC_hampel_opr.RDS")
+} else {
+	EC_f_hampel_opr <- readRDS(file.path(out_folder, "LL_EC_hampel_opr.RDS"))
+	diagWarn("hampel", "operational Hampel filter not rerun (rerun_hampel_opr = FALSE): ",
+			 "LL_EC_hampel_opr.RDS of a previous run")
+}
 
 EC_f_raidelta_fmt <- EC_f_raidelta |>
 	mutate(yr = year(ymd), mm = month(ymd), dd = 1, gr = "L", res = 5) |>
@@ -650,7 +610,7 @@ saveIt(LF_f_hampel_opr, "LL_LF_hampel_opr.RDS")
 LF_f_hampel_rai <- runStep(LF_LLrai, "hampel_LF_rai", "Hampel filter", hampelLF)
 saveIt(LF_f_hampel_rai, "LL_LF_hampel_rai.RDS")
 
-knitr::kable(stepsTable()[grepl("^hampel", stepsTable()$dataset), ], row.names = FALSE, caption = "Hampel filter")
+ktab(stepsTable()[grepl("^hampel", stepsTable()$dataset), ], caption = "Hampel filter")
 ```
 
 # CPUE maps
@@ -757,7 +717,7 @@ fisheries <- bind_rows(
 			  	summarise(records = n(), effort = sum(E), catch = sum(C, na.rm = TRUE), .groups = "drop"),
 			  by = "f")
 diagAdd("tables", "fisheries", fisheries)
-knitr::kable(fisheries, digits = 1, caption = paste0("Fisheries after the Hampel filter; catch: ", species, " (mt)"))
+ktab(fisheries, digits = 1, caption = paste0("Fisheries after the Hampel filter; catch: ", species, " (mt)"))
 saveIt(fisheries, "LL_fisheries_table.RDS")
 
 diagnostics <- list(

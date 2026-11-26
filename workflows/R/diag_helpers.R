@@ -204,3 +204,28 @@ lfStageCompare <- function(raw_df, proc_df, sample_group_cols,
 				   `Input value/range` = input_vals, `Input unit/format` = input_units,
 				   `Processed value/range` = proc_vals, `Processed unit/format` = proc_units)
 }
+
+
+# Table for the PDF reports: LaTeX tabular at the natural width of its columns
+# (markdown tables wrap the headers of wide tables). Underscores in the column
+# names become spaces, numbers get thousands separators except in year-like
+# and id columns, tables stay where they are written (float H, needs the
+# float package), long tables break across pages, wide ones are set smaller.
+ktab <- function(x, caption = NULL, digits = NULL, small = NULL) {
+	x <- as.data.frame(x, check.names = FALSE)
+	keep_plain <- grepl("^(f|yr|year|decade|cluster|fishery|month|mm|qtr|k-means)$", names(x))
+	for (j in which(keep_plain)) x[[j]] <- as.character(x[[j]])
+	if (!is.null(digits)) for (j in which(sapply(x, is.numeric))) x[[j]] <- round(x[[j]], digits)
+	names(x) <- gsub("_", " ", names(x))
+	if (is.null(small)) small <- ncol(x) > 6
+	if (!is.null(caption)) caption <- gsub("([_%&#$])", "\\\\\\1", caption)
+	op <- options(knitr.kable.NA = ""); on.exit(options(op))
+	tab <- knitr::kable(x, format = "latex", booktabs = TRUE, longtable = nrow(x) > 25,
+						caption = caption, label = NA, row.names = FALSE, linesep = "",
+						format.args = list(big.mark = ",", scientific = FALSE),
+						position = if (nrow(x) > 25) "" else "H")
+	tab <- as.character(tab)
+	if (small) tab <- paste0("\\begingroup\\small\n", tab, "\n\\endgroup")
+	# raw LaTeX block: passed to LaTeX untouched by pandoc
+	knitr::asis_output(paste0("\n```{=latex}\n", tab, "\n```\n"))
+}
