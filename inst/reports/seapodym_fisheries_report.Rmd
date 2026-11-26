@@ -60,13 +60,11 @@ map_ylim <- range(ec$lat) + c(-3, 3)
 
 Catch-effort file: `r basename(params$ec_file)`.
 `r if (nzchar(params$lf_file)) paste0("Length-frequency file: ", basename(params$lf_file), ".")`
-Years: `r years_txt`. Effort and catch are in the units of the file (effort
-unit of each gear, catch in mt for most inputs). Fisheries: gear code (`gr`
-column of the catch-effort file) and fishery number of the files.
+Years: `r years_txt`. Catch in mt.
 
 ```{r overview}
 ov <- ec |> group_by(f) |>
-	summarise(records = n(), effort = round(sum(E)), catch = round(sum(C), 1),
+	summarise(records = n(), effort = round(sum(E)), `catch (mt)` = round(sum(C), 1),
 			  years = paste(range(yr), collapse = "-"), .groups = "drop")
 if (!is.null(lf)) {
 	cnt <- lf$samples[, grepl("^L[0-9.]+$", names(lf$samples)), drop = FALSE]
@@ -82,11 +80,9 @@ tab(ov, "Fisheries in the files")
 
 # CPUE maps
 
-CPUE per cell: total catch / total effort of the cell over `r years_txt`
-(the mean monthly CPUE weighted by effort). Each map has its own linear
-colour scale, capped to the 5th-95th percentiles of the positive CPUE of the
-fishery (cells beyond take the end colours); grey: effort without catch.
-Fisheries without effort (catch removal only) are shown as catch maps.
+CPUE per cell: total catch / total effort of the cell. Colour scale per map,
+capped to the 5th-95th percentiles; grey: effort without catch. Fisheries
+without effort are shown as catch maps.
 
 ```{r cpue_maps, fig.width = 7, fig.height = 2.9}
 for (k in gears$f) {
@@ -98,7 +94,7 @@ for (k in gears$f) {
 		d$value <- d$C
 		lims <- quantile(d$value[d$value > 0], c(0.05, 0.95), names = FALSE)
 		ttl <- paste0(fishLabel(k), ": catch (no effort)")
-		lab <- paste0(sp, "catch")
+		lab <- paste0(sp, "catch (mt)")
 	} else {
 		d <- d |> filter(E > 0) |> mutate(value = C / E)
 		lims <- quantile(d$value[d$value > 0], c(0.05, 0.95), names = FALSE)
@@ -122,9 +118,7 @@ for (k in gears$f) {
 
 # Catch and effort
 
-Annual totals per fishery, on the same years for all fisheries. Years
-without records of the fishery are left empty (no data, which is not a
-catch of 0).
+Annual totals per fishery.
 
 ```{r catch_effort, fig.width = 7, fig.height = 2.9}
 yrs <- seq(min(ec$yr), max(ec$yr))
@@ -136,7 +130,7 @@ for (k in gears$f) {
 	d <- d |> pivot_longer(c(catch, effort), names_to = "var") |>
 		filter(var %in% vars) |>
 		mutate(var = factor(var, levels = c("catch", "effort"),
-							labels = c(paste0(sp, "catch"), "effort")))
+							labels = c(paste0(sp, "catch (mt)"), "effort")))
 	p <- ggplot(d, aes(yr, value)) +
 		geom_line(na.rm = TRUE) + geom_point(size = 0.6, na.rm = TRUE) +
 		facet_wrap(~ var, ncol = 1, scales = "free_y", strip.position = "left") +
@@ -177,7 +171,7 @@ lf_height <- max(3, 1.5 * ceiling(n_panel / 3) + 0.8)
 
 `r if (!is.null(lf)) "# Length distributions"`
 
-`r if (!is.null(lf)) paste0("Share of the fish per length bin (", lf$bins[2] - lf$bins[1], " cm), all samples of the fishery summed, ", years_txt, ". Free y axes, same x axis. Mode: most frequent bin; median and mean of the bin lengths, weighted by the counts. The first and last bins hold the fish below and above the length range of the formatting.")`
+`r if (!is.null(lf)) paste0("Share of the fish per length bin (", lf$bins[2] - lf$bins[1], " cm), all samples of the fishery summed.")`
 
 ```{r lf_plot, eval = !is.null(lf), fig.width = 7.5, fig.height = lf_height}
 ggplot(lfl, aes(len, prop)) +
