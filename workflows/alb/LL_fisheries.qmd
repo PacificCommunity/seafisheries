@@ -85,10 +85,11 @@ variables it has, the distance accounting for that spread (a gap counts less
 along a variable that varies a lot within the fisheries).
 
 **Prior.** When the variables a record has cannot tell two fisheries apart,
-the prior decides: each fishery is weighted by its share of the effort of the
-complete records of the same flag and year. If that flag and year has fewer
-than `r assign_prior_min_n` complete records, the share of the flag over all
-years is used, and otherwise the share over all flags.
+the prior decides: each fishery is weighted by its share of the complete
+records of the reference years with the same flag and year (number of
+records). If that flag and year has fewer than `r assign_prior_min_n` complete
+records (always the case outside the reference years), the share of the flag
+over the reference years is used, and otherwise the share over all flags.
 
 ```{r opr_kmeans}
 opr <- inp("LL_EC_LF_mm.RDS") |>
@@ -152,10 +153,16 @@ of effort):
 
 * **Records**: each complete record with the missing variables hidden, as for
   the operational records that lack them. One test per combination of missing
-  variables holding at least 1% of the effort of those records.
+  variables holding at least 1% of the effort of those records; the accuracy
+  is their mean weighted by that effort.
 * **Raised-like**: complete records summed per flag x month x 5 deg cell, as
   in the raised data, and assigned with the variables the raised data have. A
   cell is counted right when it gets the fishery with most effort in it.
+
+Both tests are run with three methods: the centroid distance without prior
+(the distance used in the original code, here on the clustering variables),
+the discriminant distance without prior, and the method used (discriminant
+distance with the flag and year prior). The other tables show the method used.
 
 ```{r opr_checks}
 # combinations of missing variables among the records assigned by the model
@@ -166,21 +173,45 @@ patterns <- mp |> filter(hide != "") |> group_by(hide) |>
 	mutate(share = share / sum(share)) |>
 	filter(share >= 0.01) |> arrange(desc(share))
 
-chk_rec <- lapply(patterns$hide, function(h)
-	check_assignment(fit, opr[ref, ], opr$cluster_km[ref], hide = strsplit(h, ", ")[[1]],
-					 weight_col = "E", method = assign_method, prior = assign_prior))
-chk <- chk_rec[[1]]   # main combination: per fishery and confusion
-chk_strata <- check_strata_assignment(fit, opr[ref, ], opr$cluster_km[ref], res = 5,
-									  method = assign_method, prior = assign_prior)
+hides <- strsplit(patterns$hide, ", ")
+checkRec <- function(method, prior) lapply(hides, function(h)
+	check_assignment(fit, opr[ref, ], opr$cluster_km[ref], hide = h,
+					 weight_col = "E", method = method, prior = prior))
+checkStrata <- function(method, prior)
+	check_strata_assignment(fit, opr[ref, ], opr$cluster_km[ref], res = 5,
+							method = method, prior = prior)
 
-acc <- data.frame(
-	test = c(rep("records", nrow(patterns)), "raised-like"),
-	hidden = c(patterns$hide, paste(miss_vars[sapply(miss_vars, pct_missing, d = rai) > 0], collapse = ", ")),
-	share = c(round(100 * patterns$share, 1), NA),
-	accuracy = round(100 * c(sapply(chk_rec, `[[`, "accuracy"), chk_strata$accuracy), 1))
-names(acc)[3:4] <- c("% of assigned effort", "accuracy (%)")
+# configured method, used for the per fishery and confusion tables
+chk_rec    <- checkRec(assign_method, assign_prior)
+chk        <- chk_rec[[1]]   # main combination of missing variables
+chk_strata <- checkStrata(assign_method, assign_prior)
+
+# comparison: distance of the original code (centroid, no prior), discriminant
+# without prior, configured method
+variants <- data.frame(method = c("centroid", "lda", assign_method),
+					   prior = c("equal", "equal", assign_prior))
+variants <- variants[!duplicated(variants), ]
+recAcc <- function(r) sum(patterns$share * sapply(r, `[[`, "accuracy"))
+acc <- do.call(rbind, lapply(seq_len(nrow(variants)), function(i) {
+	m <- variants$method[i]; pr <- variants$prior[i]
+	used <- m == assign_method && pr == assign_prior
+	r  <- if (used) chk_rec else checkRec(m, pr)
+	st <- if (used) chk_strata else checkStrata(m, pr)
+	data.frame(distance = if (m == "lda") "discriminant" else "centroid",
+			   prior = if (pr == "equal") "none" else pr,
+			   used = if (used) "yes" else "",
+			   records = round(100 * recAcc(r), 1),
+			   raised_like = round(100 * st$accuracy, 1))
+}))
+names(acc)[4:5] <- c("records (%)", "raised-like (%)")
 diagAdd("tables", "assignment_accuracy", acc)
-ktab(acc, caption = "Share of effort assigned to the right fishery")
+ktab(acc, caption = "Share of effort assigned to the right fishery, by method", small = FALSE)
+if (nrow(patterns) > 1) {
+	pat_tab <- data.frame(hidden = patterns$hide, share = round(100 * patterns$share, 1))
+	names(pat_tab)[2] <- "% of the effort assigned by the model"
+	diagAdd("tables", "assignment_patterns", pat_tab)
+	ktab(pat_tab, caption = "Combinations of missing variables tested (records): weights of the records accuracy")
+}
 ```
 
 **Per fishery.** Recall: share of a fishery's effort that the test gives back

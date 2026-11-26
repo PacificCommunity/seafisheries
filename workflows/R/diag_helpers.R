@@ -218,7 +218,8 @@ ktab <- function(x, caption = NULL, digits = NULL, small = NULL) {
 	if (!is.null(digits)) for (j in which(sapply(x, is.numeric))) x[[j]] <- round(x[[j]], digits)
 	names(x) <- gsub("_", " ", names(x))
 	if (is.null(small)) small <- ncol(x) > 6
-	if (!is.null(caption)) caption <- gsub("([_%&#$])", "\\\\\\1", caption)
+	# captions: no character that needs escaping (Quarto escapes them again)
+	if (!is.null(caption)) caption <- gsub("&", "and", gsub("%", "percent", gsub("_", " ", caption)))
 	op <- options(knitr.kable.NA = ""); on.exit(options(op))
 	tab <- knitr::kable(x, format = "latex", booktabs = TRUE, longtable = nrow(x) > 25,
 						caption = caption, label = NA, row.names = FALSE, linesep = "",
