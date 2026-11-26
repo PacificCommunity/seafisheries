@@ -47,8 +47,10 @@ ktab(data.frame(
 			  dirname(seapodym_mask_file), basename(seapodym_mask_file))),
 	caption = "SEAPODYM grid")
 
-inYears <- function(yr) if (is.null(seapodym_years)) rep(TRUE, length(yr)) else
-	yr >= seapodym_years[1] & yr <= seapodym_years[2]
+# year window of the outputs (seapodym_years; NA = no limit on that side)
+yr_from <- if (is.null(seapodym_years) || is.na(seapodym_years[1])) -Inf else seapodym_years[1]
+yr_to   <- if (is.null(seapodym_years) || is.na(seapodym_years[2])) Inf else seapodym_years[2]
+inYears <- function(yr) yr >= yr_from & yr <= yr_to
 ```
 
 # EC data
@@ -232,7 +234,8 @@ Length frequency data:  %s
 	species, seapodym_version, Sys.Date(), code_version[1], request_tag, save_folder,
 	paste(stock_domain$lat, collapse = " to "), paste(stock_domain$lon, collapse = " to "),
 	grid$res, seapodym_mask_file,
-	if (is.null(seapodym_years)) "all" else paste(seapodym_years, collapse = "-"),
+	if (is.null(seapodym_years)) "all" else
+		paste(ifelse(is.na(seapodym_years), c("first", "last"), seapodym_years), collapse = " to "),
 	cluster_file, if (file.exists(cluster_file)) format(file.info(cluster_file)$mtime) else "not found",
 	fisheries_tag, k_opr,
 	if (is.null(merge_clusters)) "no merging" else

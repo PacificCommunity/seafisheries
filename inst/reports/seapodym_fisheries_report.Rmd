@@ -40,7 +40,7 @@ years_txt <- if (is.null(params$years)) "all years" else paste(params$years, col
 # fishery labels: number and gear code of the catch-effort file
 gears <- ec |> distinct(f, gr) |> group_by(f) |>
 	summarise(gr = paste(sort(unique(gr)), collapse = "/"), .groups = "drop") |> arrange(f)
-flab <- setNames(paste0("F", gears$f, " (gear ", gears$gr, ")"), gears$f)
+flab <- setNames(paste0(gears$gr, gears$f), gears$f)   # gear code + fishery number: L1, G15, D17
 fishLabel <- function(f) {
 	out <- flab[as.character(f)]
 	ifelse(is.na(out), paste0("F", f), out)
@@ -61,8 +61,8 @@ map_ylim <- range(ec$lat) + c(-3, 3)
 Catch-effort file: `r basename(params$ec_file)`.
 `r if (nzchar(params$lf_file)) paste0("Length-frequency file: ", basename(params$lf_file), ".")`
 Years: `r years_txt`. Effort and catch are in the units of the file (effort
-unit of each gear, catch in mt for most inputs). Fishery numbers as in the
-files; the gear is the `gr` column of the catch-effort file.
+unit of each gear, catch in mt for most inputs). Fisheries: gear code (`gr`
+column of the catch-effort file) and fishery number of the files.
 
 ```{r overview}
 ov <- ec |> group_by(f) |>
@@ -122,23 +122,26 @@ for (k in gears$f) {
 
 # Catch and effort
 
-Annual totals per fishery. Years without records inside the period of the
-file are shown as 0.
+Annual totals per fishery, on the same years for all fisheries. Years
+without records of the fishery are left empty (no data, which is not a
+catch of 0).
 
-```{r catch_effort, fig.width = 7, fig.height = 3.3}
+```{r catch_effort, fig.width = 7, fig.height = 2.9}
 yrs <- seq(min(ec$yr), max(ec$yr))
 for (k in gears$f) {
 	d <- ec |> filter(f == k) |>
 		group_by(yr) |> summarise(catch = sum(C), effort = sum(E), .groups = "drop") |>
-		complete(yr = yrs, fill = list(catch = 0, effort = 0))
-	vars <- if (sum(d$effort) == 0) "catch" else c("catch", "effort")
+		complete(yr = yrs)   # NA: no record that year (gaps in the lines)
+	vars <- if (sum(d$effort, na.rm = TRUE) == 0) "catch" else c("catch", "effort")
 	d <- d |> pivot_longer(c(catch, effort), names_to = "var") |>
 		filter(var %in% vars) |>
 		mutate(var = factor(var, levels = c("catch", "effort"),
 							labels = c(paste0(sp, "catch"), "effort")))
 	p <- ggplot(d, aes(yr, value)) +
-		geom_line() + geom_point(size = 0.6) +
+		geom_line(na.rm = TRUE) + geom_point(size = 0.6, na.rm = TRUE) +
 		facet_wrap(~ var, ncol = 1, scales = "free_y", strip.position = "left") +
+		scale_x_continuous(limits = range(yrs)) +
+		scale_y_continuous(labels = scales::label_comma()) +
 		labs(x = NULL, y = NULL, title = fishLabel(k)) +
 		customTheme(9) +
 		theme(strip.placement = "outside")

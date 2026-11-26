@@ -130,7 +130,7 @@ seapodym_res       <- 2
 # mask of the SEAPODYM configuration (0 = land), one row per latitude, north first
 seapodym_mask_file <- "/opt/shared/SEAPODYM/data/forcings/run-jra55npv2_2x30d-sp/mask_jra55np_2deg_sp_cor.txt"
 dest_folder_seapodym <- here::here("data-raw", "seapodym", tolower(species), seapodym_version)
-seapodym_years <- NULL                   # e.g. c(1980, 2022); NULL = all years
+seapodym_years <- c(NA, 2025)            # first and last year written; NA = no limit, NULL = all years
 hampel_adjusted_effort <- TRUE           # TRUE: effort adjusted by the Hampel filter
 lf_max_fish <- 500                       # LF samples (fishery x year x quarter x region) capped to this
 lf_region_res <- NULL                    # LF regions smaller than this (deg) are expanded to the
