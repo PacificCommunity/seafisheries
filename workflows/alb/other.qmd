@@ -48,11 +48,10 @@ p5mask_lookup <- readRDS(system.file("extdata/masks/p5mask_lookup.RDS", package 
 	dplyr::filter(inDomain(latCent, lonCent))
 
 diagAdd("tables", "settings", data.frame(
-	setting = c("gears kept", "fisheries", "longline catch without effort", "stock domain"),
+	setting = c("gears kept", "fisheries", "stock domain"),
 	value = c(if (is.null(oth_gears)) "all except L, S, P" else paste(oth_gears, collapse = ", "),
 			  if (is.null(oth_fisheries)) "one per gear" else
 			  	paste(names(oth_fisheries), sapply(oth_fisheries, paste, collapse = "+"), sep = ": ", collapse = "; "),
-			  if (is.null(oth_ll_dummy)) "left out" else oth_ll_dummy,
 			  paste0("lat ", paste(stock_domain$lat, collapse = " to "), ", lon ",
 			  	   paste(stock_domain$lon, collapse = " to ")))))
 knitr::kable(.diag$tables$settings, caption = "Settings")
@@ -130,22 +129,34 @@ diagAdd("tables", "coords_OTH_EC", res$summary)
 EC_raw <- res$data |>
 	mutate(latCent = latitude + 2.5, lonCent = longitude + 2.5)
 
-# catch lost to the effort requirement, before removing it
-diagAdd("tables", "catch_without_effort", EC_raw |>
+# missing effort counts as no effort: the record goes to the dummy fishery
+# (catch removal only) instead of being removed
+diagAdd("tables", "effort_missing", EC_raw |>
 	filter(is.na(E)) |>
 	group_by(gr) |>
 	summarise(records = n(), catch = round(sum(.data[[sp_w]]), 1), .groups = "drop") |>
 	as.data.frame())
+EC_raw$E[is.na(EC_raw$E)] <- 0
 
 EC_raw <- runStep(EC_raw, "OTH_EC", "remove_invalid", remove_invalid,
-				  required_cols = c("ymd", "latitude", "longitude", "E"))
+				  required_cols = c("ymd", "latitude", "longitude"))
 EC_raw <- runStep(EC_raw, "OTH_EC", "remove_zero_fisheries", remove_zero_fisheries,
 				  catch_cols = w_cols, effort_col = "E")
 EC_raw <- runStep(EC_raw, "OTH_EC", "duplicates", removeContentDuplicates, id_col = "a_best_id")
 EC_raw <- runStep(EC_raw, "OTH_EC", "Pacific mask, stock domain", apply_pacific_mask,
 				  lat_col = "latCent", lon_col = "lonCent", pmask_lookup = p5mask_lookup)
-EC_oth <- EC_raw
+# catch without effort -> dummy fishery (built at the SEAPODYM formatting, with
+# the dummy records of every gear)
+EC_list <- runStep(EC_raw, "OTH_EC", "remove_dummy_fisheries", remove_dummy_fisheries,
+				   catch_cols = w_cols, effort_col = "E", return_dummy = TRUE)
+EC_oth <- EC_list$data
 saveIt(EC_oth, "OTH_EC_clean.RDS")
+saveIt(EC_list$dummy, "OTH_EC_dummy.RDS")
+diagAdd("tables", "oth_dummy", EC_list$dummy |>
+	group_by(gr) |>
+	summarise(records = n(), catch = round(sum(.data[[sp_w]]), 1), .groups = "drop") |>
+	as.data.frame())
+knitr::kable(.diag$tables$oth_dummy, caption = paste0("Records with catch but no effort, set aside for the dummy fishery; catch: ", species, " (mt)"))
 ```
 
 ```{r ec_diag}
@@ -162,11 +173,10 @@ showSteps("OTH_EC")
 
 # Fisheries
 
-One fishery per gear (or per group of gears, `oth_fisheries`). Longline catch
-without effort (`oth_ll_dummy`): set aside by longline.qmd (captain and
-observer records, catch with zero effort) and LL_fisheries.qmd (delta cells
-with too little effort): kept here so that the catch is not lost. Their effort
-is set to 0: it is in hooks, not days.
+One fishery per gear (or per group of gears, `oth_fisheries`). Records with
+catch but no effort are not in these fisheries: they go to the dummy fishery
+(gear D, catch removal only), built at the SEAPODYM formatting with the
+dummy records of every gear.
 
 ```{r fisheries}
 fisheries_map <- if (is.null(oth_fisheries)) {
@@ -181,31 +191,7 @@ ec <- EC_oth |>
 	inner_join(gear_to_f, by = "gr") |>
 	transmute(fishery, gr, yr, mm, latCent, lonCent, E, C = .data[[sp_w]])
 
-# Longline catch without effort
-ll_dummy <- NULL
-if (!is.null(oth_ll_dummy)) {
-	dummy_files <- c(captain = file.path(save_folder, "LL_cap_dummy.RDS"),
-					 observer = file.path(save_folder, "LL_obs_dummy.RDS"),
-					 delta = file.path(save_folder, "LL_fisheries", fisheries_tag, "LL_EC_raidelta_dummy.RDS"))
-	missing <- !file.exists(dummy_files)
-	if (any(missing))
-		diagWarn("fisheries", "longline dummy file(s) not found, left out: ", paste(dummy_files[missing], collapse = ", "))
-	ll_dummy <- bind_rows(lapply(names(dummy_files)[!missing], function(n)
-		readRDS(dummy_files[[n]]) |>
-			transmute(source = n, yr = year(ymd), mm = month(ymd),
-					  latCent = roundTo2.5(latCent), lonCent = roundTo2.5(lonCent),
-					  E = 0, C = .data[[sp_w]]))) |>
-		filter(C > 0, paste(latCent, lonCent) %in% paste(p5mask_lookup$latCent, p5mask_lookup$lonCent))
-	diagAdd("tables", "ll_dummy", ll_dummy |> group_by(source) |>
-				summarise(records = n(), catch = round(sum(C), 1), .groups = "drop") |> as.data.frame())
-	knitr::kable(.diag$tables$ll_dummy, caption = paste0("Longline ", species, " catch (mt) without effort"))
-	if (oth_ll_dummy != "separate" && !oth_ll_dummy %in% names(fisheries_map))
-		stop("oth_ll_dummy must be 'separate', NULL or one of: ", paste(names(fisheries_map), collapse = ", "))
-	ec <- bind_rows(ec, ll_dummy |> mutate(fishery = if (oth_ll_dummy == "separate") "LL_dummy" else oth_ll_dummy,
-										  gr = "L") |> dplyr::select(-source))
-}
-
-f_levels <- c(names(fisheries_map), if (identical(oth_ll_dummy, "separate")) "LL_dummy")
+f_levels <- names(fisheries_map)
 f_levels <- f_levels[f_levels %in% ec$fishery]
 EC_f <- ec |>
 	mutate(f = match(fishery, f_levels), res = 5, dd = 15, gr = "O") |>
@@ -225,11 +211,7 @@ saveIt(EC_f, "OTH_EC_f.RDS")
 
 ```{r ec_hampel}
 hampelCE <- function(d) do.call(apply_hampel, c(list(df = d, type = "CE"), hampel_EC))
-# fisheries without effort (longline catch only) have no CPUE to filter
-has_E <- EC_f |> group_by(f) |> summarise(E = sum(E), .groups = "drop") |> filter(E > 0) |> pull(f)
-EC_f_hampel <- bind_rows(
-	runStep(EC_f |> filter(f %in% has_E) |> dplyr::select(-fishery), "hampel_OTH_EC", "Hampel filter", hampelCE),
-	EC_f |> filter(!f %in% has_E) |> dplyr::select(-fishery))
+EC_f_hampel <- runStep(EC_f |> dplyr::select(-fishery), "hampel_OTH_EC", "Hampel filter", hampelCE)
 saveIt(EC_f_hampel, "OTH_EC_hampel.RDS")
 ```
 

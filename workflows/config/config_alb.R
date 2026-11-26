@@ -108,8 +108,43 @@ hampel_LF <- list(month_window = 6, k = 7)
 # Gears other than longline (L), purse seine (S) and pole-and-line (P).
 oth_gears     <- NULL   # gear codes kept, e.g. c("T", "G"); NULL = all of them
 oth_fisheries <- NULL   # NULL = one fishery per gear; or e.g. list(troll = "T", net = c("G", "D"))
-# Longline catch without effort (dummy records of longline.qmd and LL_fisheries.qmd):
-# "separate" = its own fishery (catch, no effort); a name of oth_fisheries to add
-# its catch to that fishery; NULL = left out of the outputs
-oth_ll_dummy  <- "separate"
+
+# ---- SEAPODYM formatting (format_seapodym.qmd) -------------------------------------
+seapodym_version <- "v1"
+# parfile of the SEAPODYM configuration: domain, resolution, mask (strdir/str_file_mask)
+seapodym_parfile   <- here::here("data-raw", "seapodym", "alb_sp_parfile.xml")
+seapodym_mask_file <- NULL               # NULL = strdir/str_file_mask of the parfile
+dest_folder_seapodym <- here::here("data-raw", "seapodym", tolower(species), seapodym_version)
+seapodym_years <- NULL                   # e.g. c(1980, 2022); NULL = all years
+hampel_adjusted_effort <- TRUE           # TRUE: effort adjusted by the Hampel filter
+lf_max_fish <- 500                       # LF samples (fishery x year x quarter x region) capped to this
+lf_region_res <- NULL                    # LF regions smaller than this (deg) are expanded to the
+                                         # cell containing them; NULL = model resolution
+bin_len     <- 1
+length_bins <- as.character(seq(min_len, max_len, by = bin_len))
+
+# Gear outputs, in fishery order. Missing files are skipped (with a message).
+# Fishery labels: gear code + number, numbered across gears in this order.
+seapodym_inputs <- list(
+	S = list(ec = file.path(save_folder, "PS", "PS_EC_hampel.RDS"),
+			 lf = file.path(save_folder, "PS", "PS_LF_hampel.RDS")),
+	P = list(ec = file.path(save_folder, "PL", "PL_EC_hampel.RDS"),
+			 lf = file.path(save_folder, "PL", "PL_LF_hampel.RDS")),
+	O = list(ec = file.path(save_folder, "OTH", "OTH_EC_hampel.RDS"),
+			 lf = file.path(save_folder, "OTH", "OTH_LF_hampel.RDS")),
+	L = list(ec = file.path(save_folder, "LL_fisheries", fisheries_tag,
+							c("LL_EC_hampel_opr.RDS", "LL_EC_hampel_raidelta.RDS")),
+			 lf = file.path(save_folder, "LL_fisheries", fisheries_tag,
+			 			   c("LL_LF_hampel_opr.RDS", "LL_LF_hampel_rai.RDS")))
+)
+# Catch without effort of every gear -> one dummy fishery (gear D, catch removal only).
+# Raised longline records without effort (LL_rai_dummy.RDS) are not included, as in
+# the original: their catch may already be in the logbook dummies.
+seapodym_dummy <- c(
+	LL_captain    = file.path(save_folder, "LL_cap_dummy.RDS"),
+	LL_observer   = file.path(save_folder, "LL_obs_dummy.RDS"),
+	LL_delta      = file.path(save_folder, "LL_fisheries", fisheries_tag, "LL_EC_raidelta_dummy.RDS"),
+	LL_unassigned = file.path(save_folder, "LL_fisheries", fisheries_tag, "LL_EC_raidelta_unassigned.RDS"),
+	OTH           = file.path(save_folder, "OTH", "OTH_EC_dummy.RDS")
+)
 
