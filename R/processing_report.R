@@ -90,6 +90,7 @@ step_reason <- function(step) {
 		"apply_pacific_mask|Pacific mask"  = "Outside the stock domain or on land (package 1 deg Pacific mask).",
 		"apply_temperature_mask"   = "Cell colder than the minimum temperature that month.",
 		"sp_code|SP_ID"            = "Other species, gears or data sources.",
+		"^gear in"                 = "Gears not listed in oth_gears (config).",
 		"infer_len_code"           = "Missing length codes recovered from other fish of the same trip. No record removed.",
 		"convert length codes"     = "Lengths measured as SD/US/PS converted to UF. No record removed.",
 		"len_code"                 = "Length code still not UF after inference and conversion.",

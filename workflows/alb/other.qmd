@@ -1,0 +1,330 @@
+---
+title: "Albacore: gears other than longline, purse seine and pole-and-line"
+author: RF
+editor_options:
+  chunk_output_type: console
+format:
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+---
+
+```{r setup, echo = F, warning = F, message = F}
+knitr::opts_chunk$set(eval = T, echo = F, message = F, warning = F)
+library(seafisheries)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+
+source(here::here("workflows", "config", "config_alb.R"))
+
+sp   <- tolower(species)
+sp_w <- paste0(sp, "_w")
+w_cols <- paste0(species_all, "_w")
+main_gears <- c("L", "S", "P")       # gears with their own workflow
+
+if (!dir.exists(sql_folder)) stop("SQL folder not found: ", sql_folder,
+								  ". Run workflows/sql_queries.R or check request_tag.")
+out_folder <- file.path(save_folder, "OTH")
+dir.create(out_folder, recursive = TRUE, showWarnings = FALSE)
+
+loadRaw <- function(name) {
+	f <- file.path(sql_folder, paste0(name, ".RDS"))
+	if (!file.exists(f)) stop("Missing raw file: ", f)
+	readRDS(f)
+}
+saveIt <- function(obj, file, folder = out_folder) {
+	if (save_it) saveRDS(obj, file.path(folder, file))
+	invisible(obj)
+}
+source(here::here("workflows", "R", "diag_helpers.R"))
+
+# 5 deg Pacific sea cells, restricted to the stock domain (cell centre inside)
+inDomain <- function(lat, lon) lat > stock_domain$lat[1] & lat < stock_domain$lat[2] &
+	lon > stock_domain$lon[1] & lon < stock_domain$lon[2]
+p5mask_lookup <- readRDS(system.file("extdata/masks/p5mask_lookup.RDS", package = "seafisheries")) |>
+	dplyr::filter(inDomain(latCent, lonCent))
+
+diagAdd("tables", "settings", data.frame(
+	setting = c("gears kept", "fisheries", "longline catch without effort", "stock domain"),
+	value = c(if (is.null(oth_gears)) "all except L, S, P" else paste(oth_gears, collapse = ", "),
+			  if (is.null(oth_fisheries)) "one per gear" else
+			  	paste(names(oth_fisheries), sapply(oth_fisheries, paste, collapse = "+"), sep = ": ", collapse = "; "),
+			  if (is.null(oth_ll_dummy)) "left out" else oth_ll_dummy,
+			  paste0("lat ", paste(stock_domain$lat, collapse = " to "), ", lon ",
+			  	   paste(stock_domain$lon, collapse = " to ")))))
+knitr::kable(.diag$tables$settings, caption = "Settings")
+```
+
+# Geo referenced catch effort data
+
+Raised catch and effort of the other gears (`best.A_BEST_AGG`, query
+`EC_OTH_rai`): flag x month x 5 deg cell, catch in mt (no numbers), effort in
+days.
+
+```{r ec_load}
+oth_sql <- loadRaw("EC_OTH_rai") |> rename_with(tolower)
+
+# catch in mt: a species not recorded -> 0; catch rows without weight are
+# ignored (the sum of the others is kept), and counted below
+EC_raw <- oth_sql
+for (s in species_all) {
+	w <- paste0(s, "_mt")
+	EC_raw[[w]][EC_raw[[paste0(s, "_nrec")]] == 0 | is.na(EC_raw[[w]])] <- 0
+}
+EC_raw <- EC_raw |>
+	transmute(a_best_id, gr = gear_code, flag = flag_code,
+			  yr = as.integer(yy), mm = as.integer(mm), ymd = make_date(yr, mm, 15),
+			  latitude = lat_short, longitude = lon_short,
+			  E = as.numeric(days),
+			  across(all_of(paste0(species_all, "_mt")), as.numeric, .names = "{sub('_mt$', '_w', .col)}"),
+			  w_rows_missing = rowSums(across(all_of(paste0(species_all, "_mt_na")))))
+if ("astrat_code" %in% names(oth_sql)) EC_raw$astrat <- oth_sql$astrat_code
+
+# What is in there: every gear, before any filter
+gear_overview <- EC_raw |>
+	group_by(gr) |>
+	summarise(records = n(), flags = paste(sort(unique(flag)), collapse = " "),
+			  years = paste(range(yr), collapse = "-"),
+			  effort_days = sum(E, na.rm = TRUE),
+			  pct_records_no_effort = round(100 * mean(is.na(E) | E == 0), 1),
+			  across(all_of(w_cols), ~ round(sum(.x), 1)), .groups = "drop") |>
+	arrange(desc(.data[[sp_w]]))
+diagAdd("tables", "gear_overview", as.data.frame(gear_overview))
+knitr::kable(gear_overview |> dplyr::select(-flags), caption = "All other gears before filtering: records, effort (days) and catch (mt) per species")
+
+gear_flag <- EC_raw |>
+	filter(.data[[sp_w]] > 0) |>
+	group_by(gr, flag) |>
+	summarise(records = n(), catch = round(sum(.data[[sp_w]]), 1),
+			  years = paste(range(yr), collapse = "-"), .groups = "drop") |>
+	arrange(gr, desc(catch))
+diagAdd("tables", "gear_flag_catch", as.data.frame(gear_flag))
+knitr::kable(gear_flag, caption = paste0("Gears and flags with ", species, " catch (mt), before filtering"))
+
+if ("astrat" %in% names(EC_raw)) {
+	diagAdd("tables", "ec_resolution", as.data.frame(table(gear = EC_raw$gr, astrat = EC_raw$astrat)))
+	if (any(EC_raw$astrat != "5", na.rm = TRUE))
+		diagWarn("EC_OTH", "records not at 5 deg (astrat_code other than 5): cell centres computed as 5 deg")
+}
+diagAdd("tables", "missing_weights", data.frame(
+	records_with_catch_rows_without_weight = sum(EC_raw$w_rows_missing > 0)))
+
+EC_raw$w_rows_missing <- NULL
+rm(oth_sql)
+EC_oth_raw <- EC_raw
+```
+
+## Data cleaning
+
+```{r ec_clean}
+if (!is.null(oth_gears))
+	EC_raw <- runStep(EC_raw, "OTH_EC", "gear in oth_gears",
+					  function(d) dplyr::filter(d, gr %in% oth_gears))
+
+res <- runStep(EC_raw, "OTH_EC", "convert coordinates",
+			   function(d) convert_coordinates_df(d, report = TRUE))
+diagAdd("tables", "coords_OTH_EC", res$summary)
+EC_raw <- res$data |>
+	mutate(latCent = latitude + 2.5, lonCent = longitude + 2.5)
+
+# catch lost to the effort requirement, before removing it
+diagAdd("tables", "catch_without_effort", EC_raw |>
+	filter(is.na(E)) |>
+	group_by(gr) |>
+	summarise(records = n(), catch = round(sum(.data[[sp_w]]), 1), .groups = "drop") |>
+	as.data.frame())
+
+EC_raw <- runStep(EC_raw, "OTH_EC", "remove_invalid", remove_invalid,
+				  required_cols = c("ymd", "latitude", "longitude", "E"))
+EC_raw <- runStep(EC_raw, "OTH_EC", "remove_zero_fisheries", remove_zero_fisheries,
+				  catch_cols = w_cols, effort_col = "E")
+EC_raw <- runStep(EC_raw, "OTH_EC", "duplicates", removeContentDuplicates, id_col = "a_best_id")
+EC_raw <- runStep(EC_raw, "OTH_EC", "Pacific mask, stock domain", apply_pacific_mask,
+				  lat_col = "latCent", lon_col = "lonCent", pmask_lookup = p5mask_lookup)
+EC_oth <- EC_raw
+saveIt(EC_oth, "OTH_EC_clean.RDS")
+```
+
+```{r ec_diag}
+diagAdd("tables", "stage_OTH_EC",
+		ecStageCompare(EC_oth_raw, EC_oth, catch_n_col = NULL, hbf_col = NULL, vessel_col = NULL,
+					   lat_col_raw = "latitude", lon_col_raw = "longitude",
+					   lat_col_proc = "latCent", lon_col_proc = "lonCent",
+					   w_unit_raw = "mt", w_unit_proc = "mt",
+					   effort_unit_raw = "days", effort_unit_proc = "days",
+					   coord_unit_proc = "5 deg x 5 deg"))
+knitr::kable(.diag$tables$stage_OTH_EC, caption = "Other gears: input vs processed")
+showSteps("OTH_EC")
+```
+
+# Fisheries
+
+One fishery per gear (or per group of gears, `oth_fisheries`). Longline catch
+without effort (`oth_ll_dummy`): set aside by longline.qmd (captain and
+observer records, catch with zero effort) and LL_fisheries.qmd (delta cells
+with too little effort): kept here so that the catch is not lost. Their effort
+is set to 0: it is in hooks, not days.
+
+```{r fisheries}
+fisheries_map <- if (is.null(oth_fisheries)) {
+	g <- sort(unique(EC_oth$gr)); stats::setNames(as.list(g), g)
+} else oth_fisheries
+gear_to_f <- stack(fisheries_map) |> transmute(gr = values, fishery = as.character(ind))
+unmapped <- setdiff(unique(EC_oth$gr), gear_to_f$gr)
+if (length(unmapped))
+	diagWarn("fisheries", "gears not in oth_fisheries, left out: ", paste(unmapped, collapse = ", "))
+
+ec <- EC_oth |>
+	inner_join(gear_to_f, by = "gr") |>
+	transmute(fishery, gr, yr, mm, latCent, lonCent, E, C = .data[[sp_w]])
+
+# Longline catch without effort
+ll_dummy <- NULL
+if (!is.null(oth_ll_dummy)) {
+	dummy_files <- c(captain = file.path(save_folder, "LL_cap_dummy.RDS"),
+					 observer = file.path(save_folder, "LL_obs_dummy.RDS"),
+					 delta = file.path(save_folder, "LL_fisheries", fisheries_tag, "LL_EC_raidelta_dummy.RDS"))
+	missing <- !file.exists(dummy_files)
+	if (any(missing))
+		diagWarn("fisheries", "longline dummy file(s) not found, left out: ", paste(dummy_files[missing], collapse = ", "))
+	ll_dummy <- bind_rows(lapply(names(dummy_files)[!missing], function(n)
+		readRDS(dummy_files[[n]]) |>
+			transmute(source = n, yr = year(ymd), mm = month(ymd),
+					  latCent = roundTo2.5(latCent), lonCent = roundTo2.5(lonCent),
+					  E = 0, C = .data[[sp_w]]))) |>
+		filter(C > 0, paste(latCent, lonCent) %in% paste(p5mask_lookup$latCent, p5mask_lookup$lonCent))
+	diagAdd("tables", "ll_dummy", ll_dummy |> group_by(source) |>
+				summarise(records = n(), catch = round(sum(C), 1), .groups = "drop") |> as.data.frame())
+	knitr::kable(.diag$tables$ll_dummy, caption = paste0("Longline ", species, " catch (mt) without effort"))
+	if (oth_ll_dummy != "separate" && !oth_ll_dummy %in% names(fisheries_map))
+		stop("oth_ll_dummy must be 'separate', NULL or one of: ", paste(names(fisheries_map), collapse = ", "))
+	ec <- bind_rows(ec, ll_dummy |> mutate(fishery = if (oth_ll_dummy == "separate") "LL_dummy" else oth_ll_dummy,
+										  gr = "L") |> dplyr::select(-source))
+}
+
+f_levels <- c(names(fisheries_map), if (identical(oth_ll_dummy, "separate")) "LL_dummy")
+f_levels <- f_levels[f_levels %in% ec$fishery]
+EC_f <- ec |>
+	mutate(f = match(fishery, f_levels), res = 5, dd = 15, gr = "O") |>
+	group_by(f, fishery, yr, mm, dd, gr, lat = latCent, lon = lonCent, res) |>
+	summarise(E = sum(E, na.rm = TRUE), C = sum(C, na.rm = TRUE), .groups = "drop") |>
+	mutate(CPUE = ifelse(E > 0, C / E, 0))
+
+f_tab <- EC_f |> group_by(f, fishery) |>
+	summarise(records = n(), effort_days = sum(E), catch = round(sum(C), 1),
+			  records_no_effort = sum(E == 0), years = paste(range(yr), collapse = "-"), .groups = "drop")
+diagAdd("tables", "fisheries", as.data.frame(f_tab))
+knitr::kable(f_tab, caption = paste0("Other-gear fisheries; catch: ", species, " (mt); numbered from 1 here, renumbered after the other gears at formatting"))
+saveIt(EC_f, "OTH_EC_f.RDS")
+```
+
+## Hampel filter
+
+```{r ec_hampel}
+hampelCE <- function(d) do.call(apply_hampel, c(list(df = d, type = "CE"), hampel_EC))
+# fisheries without effort (longline catch only) have no CPUE to filter
+has_E <- EC_f |> group_by(f) |> summarise(E = sum(E), .groups = "drop") |> filter(E > 0) |> pull(f)
+EC_f_hampel <- bind_rows(
+	runStep(EC_f |> filter(f %in% has_E) |> dplyr::select(-fishery), "hampel_OTH_EC", "Hampel filter", hampelCE),
+	EC_f |> filter(!f %in% has_E) |> dplyr::select(-fishery))
+saveIt(EC_f_hampel, "OTH_EC_hampel.RDS")
+```
+
+# Geo referenced length frequency data
+
+Aggregated length frequencies (`LF_agg`) of the species for the gears kept,
+attached to the fishery of their gear.
+
+```{r lf_load}
+LF_raw <- loadRaw("LF_agg") |>
+	runStep("OTH_LF", paste0("SP_ID == ", species, ", other gears"),
+			function(d) dplyr::filter(d, SP_ID == species, !GR %in% main_gears,
+									  is.null(oth_gears) | GR %in% oth_gears)) |>
+	rename(id = STRAT_ID, yr = YR, qtr = QTR, mm = MON, gr = GR, flag = FLAG_ID,
+		   fleet = FLEET_ID, latitude = LAT_SHORT, longitude = LON_SHORT,
+		   len = LEN, count = FREQ) |>
+	mutate(len = as.numeric(len), count = as.numeric(count), LSTRAT = as.numeric(LSTRAT))
+diagAdd("tables", "lf_gears", LF_raw |> group_by(gr) |>
+			summarise(rows = n(), fish = sum(count, na.rm = TRUE), .groups = "drop") |> as.data.frame())
+knitr::kable(.diag$tables$lf_gears, caption = paste("Length frequencies of", species, "per gear"))
+LF_oth_raw <- LF_raw
+
+astrat_lookup <- data.frame(
+	ASTRAT     = c("5",  "0", "F",  "T", "A", "1"),
+	lon_offset = c(2.5,  5,   5,    10,  5,   0.5),
+	lat_offset = c(2.5,  5,   2.5,  5,   2,   0.5)
+)
+```
+
+## Data cleaning
+
+```{r lf_clean}
+res <- runStep(LF_raw, "OTH_LF", "convert coordinates",
+			   function(d) convert_coordinates_df(d, lat_col = "latitude", lon_col = "longitude", report = TRUE))
+diagAdd("tables", "coords_OTH_LF", res$summary)
+LF_raw <- res$data
+LF_raw <- runStep(LF_raw, "OTH_LF", "length within lf_len_range",
+				  function(d) dplyr::filter(d, is.na(len) | (len >= lf_len_range[1] & len <= lf_len_range[2])))
+LF_clean <- runStep(LF_raw, "OTH_LF", "process_lf_data", process_lf_data,
+	required_cols = c("latitude", "longitude", "len"),
+	mm_col = "mm", qtr_col = "qtr",
+	strat_col = "ASTRAT", valid_strat = astrat_lookup$ASTRAT, strat_lookup = astrat_lookup,
+	lon_col = "longitude", lat_col = "latitude",
+	lat_range = lat_range, lon_range = lon_range,
+	group_cols = c("yr", "qtr", "flag", "gr", "latCent", "lonCent", "ASTRAT", "LSTRAT"),
+	len_col = "len", freq_col = "count", min_bins = lf_min_bins)
+LF_uniform_bins <- bin_to_1cm(LF_clean)
+saveIt(LF_uniform_bins, "OTH_LF_uniform.RDS")
+```
+
+```{r lf_fisheries}
+# attach each sample to its gear's fishery; keep the samples whose box holds
+# catch of that fishery in the same year and quarter
+EC_pos <- EC_f |> filter(C > 0) |> mutate(qtr = ceiling(mm / 3))
+
+LF_f <- LF_uniform_bins |>
+	inner_join(gear_to_f, by = "gr") |>
+	mutate(f = match(fishery, f_levels)) |>
+	filter(!is.na(f)) |>
+	left_join(astrat_lookup, by = "ASTRAT") |>
+	mutate(lon_from = lonCent - lon_offset, lon_to = lonCent + lon_offset,
+		   lat_from = latCent - lat_offset, lat_to = latCent + lat_offset,
+		   len = pmin(pmax(len, min_len), max_len),
+		   row_id = row_number()) |>
+	dplyr::select(-lon_offset, -lat_offset)
+
+matched_ids <- LF_f |>
+	semi_join(EC_pos, by = join_by(f == f, qtr == qtr, yr == yr,
+								   lon_from <= lon, lon_to >= lon,
+								   lat_from <= lat, lat_to >= lat)) |>
+	pull(row_id)
+diagAdd("tables", "lf_matching", LF_f |>
+	mutate(matched = row_id %in% matched_ids) |>
+	group_by(fishery, matched) |>
+	summarise(fish = round(sum(count)), .groups = "drop") |> as.data.frame())
+knitr::kable(.diag$tables$lf_matching, caption = "Length samples with (matched) or without catch of their fishery in their box, year and quarter")
+
+LF_f <- LF_f |> filter(row_id %in% matched_ids) |> dplyr::select(-row_id, -fishery)
+saveIt(LF_f, "OTH_LF_f.RDS")
+```
+
+## Hampel filter
+
+```{r lf_hampel}
+hampelLF <- function(d) do.call(apply_hampel, c(list(df = d, type = "LF"), hampel_LF))
+LF_f_hampel <- if (nrow(LF_f)) runStep(LF_f, "hampel_OTH_LF", "Hampel filter", hampelLF) else LF_f
+saveIt(LF_f_hampel, "OTH_LF_hampel.RDS")
+
+knitr::kable(stepsTable()[grepl("^hampel", stepsTable()$dataset), ], row.names = FALSE, caption = "Hampel filter")
+
+diagnostics <- list(
+	species = species, request_tag = request_tag, rendered = Sys.time(),
+	steps = stepsTable(), messages = .diag$messages, warnings = .diag$warnings,
+	tables = .diag$tables)
+saveIt(diagnostics, "OTH_processing_diagnostics.RDS")
+# PDF report, from the console:
+# processing_report(file.path(out_folder, "OTH_processing_diagnostics.RDS"))
+```

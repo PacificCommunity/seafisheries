@@ -104,3 +104,12 @@ plot_years <- c(1980, 2022)
 hampel_EC <- list(year_window = 5, radius_km = 250, k = 7)
 hampel_LF <- list(month_window = 6, k = 7)
 
+# ---- Other gears (other.qmd) ------------------------------------------------------
+# Gears other than longline (L), purse seine (S) and pole-and-line (P).
+oth_gears     <- NULL   # gear codes kept, e.g. c("T", "G"); NULL = all of them
+oth_fisheries <- NULL   # NULL = one fishery per gear; or e.g. list(troll = "T", net = c("G", "D"))
+# Longline catch without effort (dummy records of longline.qmd and LL_fisheries.qmd):
+# "separate" = its own fishery (catch, no effort); a name of oth_fisheries to add
+# its catch to that fishery; NULL = left out of the outputs
+oth_ll_dummy  <- "separate"
+

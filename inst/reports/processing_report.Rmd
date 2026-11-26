@@ -36,10 +36,13 @@ ds_labels <- c(captain = "Captain logbooks", observer = "Observer logbooks",
 			   hampel_EC_opr = "Hampel filter: operational catch and effort",
 			   hampel_EC_delta = "Hampel filter: delta catch and effort",
 			   hampel_LF_opr = "Hampel filter: operational lengths",
-			   hampel_LF_rai = "Hampel filter: aggregated lengths")
+			   hampel_LF_rai = "Hampel filter: aggregated lengths",
+			   OTH_EC = "Other gears: catch and effort", OTH_LF = "Other gears: length frequency",
+			   hampel_OTH_EC = "Hampel filter: other gears catch and effort",
+			   hampel_OTH_LF = "Hampel filter: other gears lengths")
 ds_label <- function(ds) ifelse(ds %in% names(ds_labels), ds_labels[ds], ds)
 # selection steps (other species, gears, data sources) are not data loss
-steps$selection <- grepl("sp_code|SP_ID", steps$step)
+steps$selection <- grepl("sp_code|SP_ID|^gear in", steps$step)
 
 # titles and notes for the tables outside the dataset sections
 table_info <- list(
@@ -61,6 +64,17 @@ table_info <- list(
 	match_types = c("How operational records got a length", "NA: no operational length; filled from aggregated LF if possible."),
 	monthly_aggregation = c("Monthly aggregation", "Records per vessel x month x 1 deg cell; removed: no catch of any species."),
 	settings = c("Settings", ""),
+	gear_overview = c("Other gears before filtering",
+		"Every gear of best.A_BEST_AGG except L, S and P: records, effort (days), share of records without effort, catch per species (mt)."),
+	gear_flag_catch = c("Other gears and flags with catch of the species", "Before filtering; catch in mt."),
+	ec_resolution = c("Resolution of the other-gear records", "astrat_code per gear; centres are computed as 5 deg cells."),
+	missing_weights = c("Records with catch rows without weight", "Their catch is the sum of the rows with a weight."),
+	catch_without_effort = c("Other gears: catch without effort",
+		"Records removed by remove_invalid because their effort (days) is missing; catch of the species in mt."),
+	ll_dummy = c("Longline catch without effort", "Added to the other-gear outputs (oth_ll_dummy); catch in mt."),
+	lf_gears = c("Length frequencies per gear", ""),
+	lf_matching = c("Length samples matched to catch",
+		"A sample is kept if its box holds catch of its fishery in the same year and quarter."),
 	input_check = c("Clustering variables vs the clustering data",
 		"Complete records of the fit years scaled with the saved clustering parameters: expected mean 0 and sd 1. A departure means a variable is not built as in the data the clustering was fitted on."),
 	label_map = c("Cluster numbers", "Saved cluster number, after merging, and fishery number."),

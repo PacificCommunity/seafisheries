@@ -31,7 +31,7 @@ library(odbc)
 data_dir    <- "data-raw/sql"                  # gitignored (data-raw/*)
 request_tag <- format(Sys.Date(), "%Y-%m-%d")  # one folder per download campaign
 overwrite   <- FALSE                           # TRUE re-downloads existing files
-queries_to_run <- c("EC_LL_captain", "EC_LL_obs", "EC_LL_rai", "LF_tufman", "LF_agg")
+queries_to_run <- c("EC_LL_captain", "EC_LL_obs", "EC_LL_rai", "EC_OTH_rai", "LF_tufman", "LF_agg")
 
 # Species pivoted into their own columns; every other code goes to "oth"
 species <- c("YFT", "SKJ", "BET", "ALB")
@@ -61,7 +61,8 @@ sql_in <- function(x) paste0("('", paste(x, collapse = "', '"), "')")
 
 # SQL select items pivoting catch rows by species, for use inside a GROUP BY.
 # sp_col: species code column. n_expr: number of fish of one row (NULL when one
-# row = one fish). w_expr: weight of one row. w_unit: suffix of weight columns.
+# row = one fish, NA when the table has no number). w_expr: weight of one row.
+# w_unit: suffix of weight columns.
 # Returns the select items, the column names and which columns are counts
 # (to be coalesced to 0 when the outer join finds no catch row).
 pivot_species_sql <- function(sp_col, n_expr, w_expr, w_unit, species) {
@@ -77,6 +78,8 @@ pivot_species_sql <- function(sp_col, n_expr, w_expr, w_unit, species) {
 		add(sprintf("sum(case when %s then 1 else 0 end)", cond), paste0(g, "_nrec"), TRUE)
 		if (is.null(n_expr)) {
 			add(sprintf("sum(case when %s then 1 else 0 end)", cond), paste0(g, "_n"), TRUE)
+		} else if (identical(n_expr, NA)) {
+			# no number in the table
 		} else {
 			add(sprintf("sum(case when %s then %s end)", cond, n_expr), paste0(g, "_n"), FALSE)
 			add(sprintf("sum(case when %s and %s is null then 1 else 0 end)", cond, n_expr),
@@ -245,6 +248,28 @@ from best.l_best_agg b
 		and coalesce(b.fleet_code, '') = coalesce(fleet.subfleet_code, '')
 		and fleet.gear_code = 'L'
 	left join catch on b.l_best_id = catch.l_best_id
+", piv$select, outer_catch_sql(piv)))
+
+# ---- EC other gears, raised (best.A_BEST_AGG) ----------------------------------
+# Every gear except longline (L), purse seine (S) and pole-and-line (P), which
+# have their own tables. One row per a_best_id. Catch in mt only (no number in
+# the original query); effort in days (also hhooks and sets where reported).
+
+piv <- pivot_species_sql("c.sp_code", NA, "c.sp_mt", "mt", species)
+run_query("EC_OTH_rai", "OFP_DBS", "FISH_MASTER", key = "a_best_id", sql = sprintf("
+with catch as (
+	select
+		c.a_best_id,
+		%s
+	from best.a_best_agg_catch c
+	group by c.a_best_id
+)
+select
+	b.*,
+	%s
+from best.a_best_agg b
+	left join catch on b.a_best_id = catch.a_best_id
+where b.gear_code not in ('P', 'S', 'L')
 ", piv$select, outer_catch_sql(piv)))
 
 # ---- LF operational (Tufman2): port sampling, LL observer, PS observer ----------

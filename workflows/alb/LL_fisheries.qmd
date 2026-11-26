@@ -155,7 +155,6 @@ chk_dec <- check_assignment(fit, opr[complete, ], opr$cluster_km[complete], hide
 ```
 
 ## Assigning the incomplete records
-## Assigning the incomplete records
 
 ```{r opr_assign}
 a_opr <- assign_records(fit, opr[!complete, ], method = assign_method, prior = assign_prior)
